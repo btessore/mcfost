@@ -30,6 +30,11 @@ module see
     real(kind=dp), allocatable :: pops_ion(:,:,:), npop_dag(:,:)
     real(kind=dp), allocatable :: fvar(:,:), xvar(:,:), dfvar(:,:,:)!Jacobian
 
+    !-> move elsewhere probably, needed in optical_depth and other
+    !variables for non-local ALO
+    integer, parameter :: alo_order = 0 ! alo_order = 0, n_neighbours_max = 0; alo_order = 1, n_neighbours_max represent the nearest neighbours.
+                                    !alo_order = 2, nearest neighbours of the nearest neighbours etc...
+
 
     contains
 
@@ -39,7 +44,7 @@ module see
         integer(kind=8), intent(in), optional :: mem
         integer :: Nmaxlevel,Nmaxline,Nmaxcont,NlevelTotal,Nmaxstage
         integer :: alloc_status
-        integer(kind=8) :: mem_alloc_local
+        integer(kind=8) :: mem_alloc_local, mem_alloc_non_local_alo
         integer :: kr, n, icell, l, i, j
         real(kind=dp) :: wl, anu1, e1, b1
         real(kind=dp) :: anu2, e2, b2!higher prec integ
@@ -73,6 +78,37 @@ module see
             enddo
             atom => null()
         enddo
+
+        !allocate space for the non-local ALO.
+        !Currently, the local variabls, %Gamma(:,:,id), etc are kept because
+        !electronic density is solved locally with the local populations only.
+        !
+        call count_neighbours(n_neighbours_max) !2, 8, 26 for spherical grid 1D, 2D, 3D
+		n_non_empty_cells = size(pack(icompute_atomRT,mask=icompute_atomrt>0))
+		allocate(tab_index_cell(n_non_empty_cells))
+		allocate(tab_index_neighb(n_non_empty_cells,n_neighbours_max))
+        i = 0
+        do icell=1,n_cells
+            if (icompute_atomrt(icell)>0) then
+                i = i + 1
+                tab_index_cell(i) = icell
+                tab_index_neighb(i,:) = index_neighbours(n_neighbours_max,icell)
+            endif
+        enddo
+        mem_alloc_non_local_alo = sizeof(tab_index_cell)+sizeof(tab_index_neighb)
+        do n=1, NactiveAtoms
+            atom => ActiveAtoms(n)%p
+            !the +1 represent the local point (cell), not counted in the neighbours by convention.
+            !if no neighbours, the matrix is a system of NlevelxNlevel equations per cells, unaffected by other cells.
+            allocate(atom%w(n_non_empty_cells*atom%Nlevel,(n_neighbours_max+1)*atom%Nlevel),stat=alloc_status)
+            if (alloc_Status > 0) then
+                write(*,*) 8 * n_non_empty_cells*atom%Nlevel * (n_neighbours_max+1)*atom%Nlevel / 1024.**3, 'GB'
+                call error("Allocation error atom%w")
+            endif
+            mem_alloc_non_local_alo = mem_alloc_non_local_alo + sizeof(atom%w)
+        enddo
+        atom => null()
+
 
         !-> allocate space for non-LTE only quantities !
         ! NOTE: index 1 is always the current solution
@@ -208,7 +244,9 @@ module see
         endif
 
 
+        mem_alloc_local = mem_alloc_local +  mem_alloc_non_local_alo
         write(*,'("  Total memory allocated in NLTEloop:"(1F14.3)" GB")') mem_alloc_local / 1024./1024./1024.
+        write(*,'("  -- with "(1F14.3)" GB for the non-local rate matrix.")') mem_alloc_non_local_alo / 1024.**3
 
         return
     end subroutine alloc_nlte_var
@@ -223,9 +261,11 @@ module see
 
         deallocate(tab_Aji_cont, tab_Vij_cont)
 
+        deallocate(tab_index_cell,tab_index_neighb)
+
         do n=1, NactiveAtoms
             atom => ActiveAtoms(n)%p
-            deallocate(atom%Gamma)
+            deallocate(atom%Gamma,atom%w)
             do kr=1, atom%Nline
                 deallocate(atom%lines(kr)%Rij,atom%lines(kr)%Rji)
                 deallocate(atom%lines(kr)%Cij,atom%lines(kr)%Cji)

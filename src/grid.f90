@@ -28,6 +28,10 @@ module grid
   real, dimension(:,:), allocatable :: vfield3d ! n_cells x 3
   real, dimension(:), allocatable :: vfield ! n_cells
 
+  integer :: n_non_empty_cells, n_neighbours_max ! number max of neighbours for each cell. Bounded by n_cells (large)
+  integer, dimension(:), allocatable :: tab_index_cell !index of non-empty cells of the grid
+  integer, dimension(:,:), allocatable :: tab_index_neighb !index of neighbours for each cell
+
   contains
 
   subroutine alloc_atomrt_grid()
@@ -364,6 +368,71 @@ subroutine setup_grid()
 
 end subroutine setup_grid
 
+subroutine count_neighbours(n)
+! return the number max of neighbours for all cells
+   integer, intent(out) :: n
+   integer :: p, icell, i0, j0, k0, i, j, k, m
+
+   if ((lcylindrical)) then
+      call error("(count_neighbours) Non-local alo not working for cylindrical grid") 
+      return
+   endif
+
+   if ((lvoronoi)) then
+      call error("(count_neighbours) Non-local alo not working for voronoi grid yet") 
+      return
+   endif
+
+   !spherical grid
+   p = 2
+   if (l3d) p = 3
+   if (lmodel_1d) p = 1
+   n = 3**p - 1
+   write(*,*) n
+   n = 0
+   do icell=1, n_cells
+      m = 0
+      i0 = cell_map_i(icell); j0 = cell_map_j(icell); k0 = cell_map_k(icell)
+      if (j0==0) cycle
+      do i=max(i0-1,1),min(i0+1,n_rad),2
+         bz : do j=max(j0-1,j_start+1),min(j0+1,nz-1),2
+            if (j==0) cycle bz
+            do k=max(1,k0-1),min(k0+1,n_az),2
+               m = m + 1
+            enddo
+         enddo bz
+      enddo
+      n = max(m,n)
+   enddo
+   write(*,*) n
+   stop
+   return
+end subroutine count_neighbours
+
+function index_neighbours(N,icell0)
+   integer, intent(in) :: n, icell0
+   integer, dimension(n) :: index_neighbours
+   integer :: i0, j0, k0
+   integer :: i, j, k, ix
+
+   index_neighbours = 0
+   i0 = cell_map_i(icell0)
+   j0 = cell_map_j(icell0)
+   k0 = cell_map_k(icell0)
+
+   ix = 0
+   do i=i0-1,i0+1,2
+      do j=j0-1,j0+1,2
+         do k=k0-1,k0+1,2
+            ix = ix + 1
+            index_neighbours(ix) = cell_map(i,j,k)
+         enddo
+      enddo
+   enddo
+   
+
+   return
+end function index_neighbours
 
 subroutine nn_ksmooth(arr)
   !Nearest Neighbours Kernel smoother.
