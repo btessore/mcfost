@@ -413,7 +413,12 @@ module atom_transfer
                   end if !etape
 
                   !update populations of all atoms including electrons
-                  call update_populations(id, icell, (l_iterate_ne.and.icompute_atomRT(icell)==1), diff)
+                  !for electrons, we solve it locally, with the local rate matrix. Otherwise,
+                  !we solve for all cells at the same time. Until I find something better
+                  !to include non-local effects in the n-ne solutions.
+                  if ((l_iterate_ne.and.icompute_atomRT(icell)==1)) then
+                     call update_populations(id, icell, .true., diff)
+                  endif
 
                   ! ************************** NG's **************************!
                   ! accelerate locally, cell-by-cell for all levels only
@@ -437,6 +442,14 @@ module atom_transfer
             !$omp end parallel
             call progress_bar(50)
             write(*,*) " " !for progress bar
+
+            !***********************************************************!
+            ! **************  Solving for the populations **************!
+            !Even if ellectrons have been solve with local rate matrix
+            !we update the populations with the non-local version here
+
+            !***********************************************************!
+
 
             !***********************************************************!
             ! **********  Ng's acceleration administration *************!
@@ -861,7 +874,8 @@ module atom_transfer
 
       logical :: labs
       logical :: l_iterate, l_iterate_ne
-      
+   write(*,*) "NOT UP TO DO DATE WITH NON-LOCAL ALO!"
+   stop
       !Ng's acceleration
       integer, parameter :: Ng_Ndelay_init = 1 !minimal number of iterations before starting the cycle.
                                                !min is 1 (so that conv_speed can be evaluated)

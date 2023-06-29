@@ -368,9 +368,10 @@ subroutine setup_grid()
 
 end subroutine setup_grid
 
-subroutine count_neighbours(n)
+subroutine count_neighbours(n,order)
 ! return the number max of neighbours for all cells
    integer, intent(out) :: n
+   integer, intent(in) :: order
    integer :: p, icell, i0, j0, k0, i, j, k, m
 
    if ((lcylindrical)) then
@@ -388,31 +389,31 @@ subroutine count_neighbours(n)
    if (l3d) p = 3
    if (lmodel_1d) p = 1
    n = 3**p - 1
-   write(*,*) n
+   !order = 1
    n = 0
    do icell=1, n_cells
-      m = 0
+      m = -1 !removing the cell (i,j,k)
       i0 = cell_map_i(icell); j0 = cell_map_j(icell); k0 = cell_map_k(icell)
       if (j0==0) cycle
-      do i=max(i0-1,1),min(i0+1,n_rad),2
-         bz : do j=max(j0-1,j_start+1),min(j0+1,nz-1),2
+      do i=max(i0-order,1),min(i0+order,n_rad), 1
+         bz : do j=max(j0-order,j_start),min(j0+order,nz), 1
             if (j==0) cycle bz
-            do k=max(1,k0-1),min(k0+1,n_az),2
+            do k=max(k0-order,1),min(k0+order,n_az),1
                m = m + 1
             enddo
          enddo bz
       enddo
       n = max(m,n)
    enddo
-   write(*,*) n
-   stop
+   write(*,*) "The number max of neighbours for each cell is ", n
+
    return
 end subroutine count_neighbours
 
-function index_neighbours(N,icell0)
-   integer, intent(in) :: n, icell0
+function index_neighbours(N,icell0,order)
+   integer, intent(in) :: n, icell0,order
    integer, dimension(n) :: index_neighbours
-   integer :: i0, j0, k0
+   integer :: i0, j0, k0, icell
    integer :: i, j, k, ix
 
    index_neighbours = 0
@@ -421,15 +422,32 @@ function index_neighbours(N,icell0)
    k0 = cell_map_k(icell0)
 
    ix = 0
-   do i=i0-1,i0+1,2
-      do j=j0-1,j0+1,2
-         do k=k0-1,k0+1,2
+   !order = 1
+   ! write(*,*) icell0
+   do i=max(i0-order,1),min(i0+order,n_rad), 1
+      bz : do j=max(j0-order,j_start),min(j0+order,nz), 1
+         if (j==0) cycle bz
+         do k=max(k0-order,1),min(k0+order,n_az),1
+            icell = cell_map(i,j,k)
+            if (icell==icell0) cycle
             ix = ix + 1
-            index_neighbours(ix) = cell_map(i,j,k)
+            index_neighbours(ix) = icell
+            ! write(*,*) "->neighb = ", icell, ix
          enddo
-      enddo
+      enddo bz
    enddo
-   
+
+   ! ix = 0
+   ! do i=i0-1,i0+1,2
+   !    do j=j0-1,j0+1,2
+   !       do k=k0-1,k0+1,2
+   !          ix = ix + 1
+   !          index_neighbours(ix) = cell_map(i,j,k)
+
+   !          write(*,*) icell0, index_neighbours(ix)
+   !       enddo
+   !    enddo
+   ! enddo
 
    return
 end function index_neighbours

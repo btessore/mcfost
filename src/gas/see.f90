@@ -83,16 +83,17 @@ module see
         !Currently, the local variabls, %Gamma(:,:,id), etc are kept because
         !electronic density is solved locally with the local populations only.
         !
-        call count_neighbours(n_neighbours_max) !2, 8, 26 for spherical grid 1D, 2D, 3D
+        call count_neighbours(n_neighbours_max,alo_order) !2, 8, 26 for spherical grid 1D, 2D, 3D
 		n_non_empty_cells = size(pack(icompute_atomRT,mask=icompute_atomrt>0))
 		allocate(tab_index_cell(n_non_empty_cells))
 		allocate(tab_index_neighb(n_non_empty_cells,n_neighbours_max))
+        write(*,*) "**** found ", n_non_empty_cells, " non-empty cells"
         i = 0
         do icell=1,n_cells
             if (icompute_atomrt(icell)>0) then
                 i = i + 1
                 tab_index_cell(i) = icell
-                tab_index_neighb(i,:) = index_neighbours(n_neighbours_max,icell)
+                tab_index_neighb(i,:) = index_neighbours(n_neighbours_max,icell,alo_order)
             endif
         enddo
         mem_alloc_non_local_alo = sizeof(tab_index_cell)+sizeof(tab_index_neighb)
@@ -433,6 +434,33 @@ module see
         return
     end subroutine see_atom
 
+FIRST fill the collision matrix only which is diagonal (right ???, check eq.)
+to make sure that the inversion of this matrix lead to the LTE solution like the diagonal solution
+    subroutine collision_rate_matrix()
+    !for all active atoms, fill the rate matrix with
+    ! collisional rates, for this ne and LTE pops.
+    ! We only have to run on the tab_index_cell and not the neighbours as
+    ! the collision rate matrix is digonal (right ?).
+        integer :: nact, id0, icell, i
+        type(AtomType), pointer :: at
+
+        do nact=1, NactiveAtoms
+            at => ActiveAtoms(nact)%p
+            do i=1, n_non_empty_cells
+                icell = tab_index_cell(i)
+                if (at%id=='H') then
+                    call collision_rates_hydrogen_loc(id0,icell)
+                else
+                    call init_colrates_atom(id,at)
+                    call collision_rates_atom_loc(id0,icell,at)
+                endif
+                at%w
+            enddo
+        enddo    
+        at => null()
+
+        return
+    end subroutine collision_rate_matrix
 
     subroutine rate_matrix(id)
         integer, intent(in) :: id
