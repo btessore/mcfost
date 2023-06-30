@@ -25,8 +25,8 @@ module atom_transfer
    use opacity_atom, only : alloc_atom_opac, Itot, psi, dealloc_atom_opac, xcoupling, write_opacity_emissivity_bin, &
         lnon_lte_loop, vlabs, calc_contopac_loc, set_max_damping, deactivate_lines, activate_lines, &
         activate_continua, deactivate_continua
-   use see, only : ngpop, Neq_ng, ngpop, alloc_nlte_var, dealloc_nlte_var, frac_limit_pops, &
-                  init_rates, update_populations, accumulate_radrates_mali, write_rates, init_radrates_atom
+   use see, only : ngpop, Neq_ng, ngpop, alloc_nlte_var, dealloc_nlte_var, frac_limit_pops, init_rates, update_populations, &
+      accumulate_radrates_mali, write_rates, init_radrates_atom, update_populations_nonlocal, test_fill_digonal_w
    use optical_depth, only : integ_ray_atom
    use utils, only : cross_product, gauss_legendre_quadrature, progress_bar, rotation_3d, vacuum2air, &
          Ng_accelerate, Accelerate, check_ng_pops
@@ -419,7 +419,7 @@ module atom_transfer
                   if ((l_iterate_ne.and.icompute_atomRT(icell)==1)) then
                      call update_populations(id, icell, .true., diff)
                   endif
-
+call test_fill_digonal_w(id,icell)
                   ! ************************** NG's **************************!
                   ! accelerate locally, cell-by-cell for all levels only
                   ! ************************** END! **************************!
@@ -447,6 +447,8 @@ module atom_transfer
             ! **************  Solving for the populations **************!
             !Even if ellectrons have been solve with local rate matrix
             !we update the populations with the non-local version here
+
+            call update_populations_nonlocal(.false.)
 
             !***********************************************************!
 
@@ -874,8 +876,7 @@ module atom_transfer
 
       logical :: labs
       logical :: l_iterate, l_iterate_ne
-   write(*,*) "NOT UP TO DO DATE WITH NON-LOCAL ALO!"
-   stop
+
       !Ng's acceleration
       integer, parameter :: Ng_Ndelay_init = 1 !minimal number of iterations before starting the cycle.
                                                !min is 1 (so that conv_speed can be evaluated)
@@ -904,7 +905,8 @@ module atom_transfer
       integer :: cstart_iter, cend_iter
       real :: time_iteration, cpustart_iter, cpuend_iter, time_iter_avg
       integer :: ibar, n_cells_done, n_cells_remaining
-
+   write(*,*) "NOT UP TO DO DATE WITH NON-LOCAL ALO!"
+   stop
       ! -------------------------------- INITIALIZATION -------------------------------- !
       write(*,*) '-------------------------- NON-LTE LOOP ------------------------------ '
       time_nlte_loop = 0!total time in the non-LTE loop for all steps

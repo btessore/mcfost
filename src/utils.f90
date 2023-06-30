@@ -227,6 +227,22 @@ end function interp_dp
 
 !**********************************************************************
 
+function matdiag(A,n)
+   !return the diagonal of a square matrix A(N,N)
+   !as a vector of length n.
+   integer, intent(in) :: n
+   real(kind=dp), intent(in) :: A(n*n)!A(n,n)
+   real(kind=dp) :: matdiag(n)
+   integer :: i
+
+   ! do i = 1, n
+   !    matdiag(i) = A(i,i)
+   ! end do
+   matdiag(:) = A(1::n+1)
+
+   return
+end function matdiag
+
 subroutine GaussSlv(a, b, n)
   ! Resolution d'un systeme d'equation par methode de Gauss
   ! Non optimise : meme pas de recherche du pivot max !!!

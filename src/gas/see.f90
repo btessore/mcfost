@@ -87,7 +87,8 @@ module see
 		n_non_empty_cells = size(pack(icompute_atomRT,mask=icompute_atomrt>0))
 		allocate(tab_index_cell(n_non_empty_cells))
 		allocate(tab_index_neighb(n_non_empty_cells,n_neighbours_max))
-        write(*,*) "**** found ", n_non_empty_cells, " non-empty cells"
+        write(*,*) " --- The number of maximum neighbours for each cell is ", n_neighbours_max
+        write(*,*) " --- There are ", n_non_empty_cells, " non-empty cells"
         i = 0
         do icell=1,n_cells
             if (icompute_atomrt(icell)>0) then
@@ -435,8 +436,39 @@ module see
         return
     end subroutine see_atom
 
-FIRST fill the collision matrix only which is diagonal (right ???, check eq.)
-to make sure that the inversion of this matrix lead to the LTE solution like the diagonal solution
+    subroutine nlocal_SEE_atom(at)
+    ! --------------------------------------------------------------------!
+    ! For atom at solves for the Statistical Equilibrium Equations (SEE)
+    !
+    !
+    ! For numerical stability, the row with the largest populations is
+    ! eliminated (i.e., it is replaced by the mass conservation law).
+    !
+    ! see Hubeny & Mihalas Stellar atmospheres, p. 448-450
+    !	eqs 14.6 to 14.8c
+    !
+    !
+    ! --------------------------------------------------------------------!
+        type(AtomType), intent(inout) :: at
+        real(kind=dp) :: dM
+        integer :: niter, i
+        real(kind=dp), allocatable :: b(:,:)
+
+        allocate(b(at%Nlevel,n_non_empty_cells))
+        b(:,:) = 0.0
+        !what is b in that contexte ?? 
+
+        call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%w,at%n,b,niter,dM)
+        deallocate(b)
+
+        if (allocated(ngpop)) then
+            ngpop(1:at%Nlevel,at%activeindex,:,1) = at%n(:,:)
+            ! atom%n(:,icell) = ndag !-> no need to reset, all populations are inverted at the same time
+        endif
+
+        return
+    end subroutine nlocal_SEE_atom
+
     subroutine collision_rate_matrix()
     !for all active atoms, fill the rate matrix with
     ! collisional rates, for this ne and LTE pops.
@@ -445,6 +477,7 @@ to make sure that the inversion of this matrix lead to the LTE solution like the
         integer :: nact, id0, icell, i
         type(AtomType), pointer :: at
 
+        id0 = 1
         do nact=1, NactiveAtoms
             at => ActiveAtoms(nact)%p
             do i=1, n_non_empty_cells
@@ -452,20 +485,66 @@ to make sure that the inversion of this matrix lead to the LTE solution like the
                 if (at%id=='H') then
                     call collision_rates_hydrogen_loc(id0,icell)
                 else
-                    call init_colrates_atom(id,at)
+                    call init_colrates_atom(id0,at)
                     call collision_rates_atom_loc(id0,icell,at)
                 endif
                 !init
-                at%w(:,:,i,:) = 0.0_dp
+                !radiative rates are 0
+                !tmp
+                call rate_matrix_atom(id0, at)
                 !1 because the off-diagonals (neighbours) do not contribute to the collision rates.
                 !col for transition i, j, at (non-empty) cell i for "neigbour" 1 (the cell i)
-                at%w(i,j,i,1) =
+                ! at%w(i,j,i,1) =
+
+                at%w(:,:,i,1) = at%Gamma(:,:,id0)
+                if (i==2) then
+                write(*,*) at%w(:,:,i,1)
+                write(*,*) matdiag(at%w(:,:,i,1),at%Nlevel)
+                endif
             enddo
         enddo    
         at => null()
 
         return
     end subroutine collision_rate_matrix
+
+    function i_icell(icell)
+        integer :: i_icell
+        integer, intent(in) :: icell
+        integer :: i
+        ! integer, save :: i0 = 1
+
+        i_icell = 0
+        ! i_loop : do i=i0,n_non_empty_cells
+        i_loop : do i=1,n_non_empty_cells
+            if (tab_index_cell(i)==icell) then
+                i_icell = i
+                ! i0 = i !to start for the next cell from this point
+            endif
+        enddo i_loop
+
+
+        return
+    end function i_icell
+
+    subroutine test_fill_digonal_w(id,icell)
+    !fill the diagonal of w for each atom locally with the local
+    !MALI rate matrix
+        integer, intent(in) :: id, icell
+        type(AtomType), pointer :: at
+        integer :: nact
+
+        do nact=1, Nactiveatoms
+            at => activeatoms(nact)%p
+            !once all rates have been accumulated (frequency and angle integrated)
+            call rate_matrix_atom(id, at)
+            !i_icell is the index of the cell icell on the list of n_non_empty_cells.
+            at%w(:,:,i_icell(icell),1) = at%gamma(:,:,id)
+            at => null()
+        enddo
+
+        return
+    end subroutine test_fill_digonal_w
 
     subroutine jacobi_sparse_nlocal_see(nl,n,m,A,x,b,niter,diff)
     ! Note: In principle could go to utils.f90. However, this routine is so specific
@@ -481,7 +560,7 @@ to make sure that the inversion of this matrix lead to the LTE solution like the
         real(kind=dp), parameter :: tol = 1e-6 ! Convergence tolerance
         !eventually, omega would be defined as a function of the eigen values of A
         real(kind=dp), parameter :: omega = 1.0 ! Damping factor (0 < omega < 1)
-        integer, parameter :: nIterMax = 50
+        integer, parameter :: nIterMax = 5000
 
         integer, intent(in) :: nl, n, m
         real(kind=dp), intent(in) :: A(nl, nl, n, m), b(nl,n)
@@ -491,34 +570,85 @@ to make sure that the inversion of this matrix lead to the LTE solution like the
         real(kind=dp), intent(out) :: diff
 
         logical :: lconverged
-        integer :: i, j
+        integer :: i, j, icell,icell_n
+        real(kind=dp) :: diag(nl)
+        real(kind=dp), allocatable :: x_new(:,:)
 
         !initial solution = previous values of x
+        allocate(x_new(nl,n))
+        x_new = x
 
         diff = 0
         niter = 0
         lconverged = .false.
         do while (.not. lconverged)
-            iter = iter + 1
+            niter = niter + 1
 
             ! Calculate the new x values using the damped Jacobi method
-            do i = 1, n
-                x_new(i) = (1.0 - omega) * x(i) + omega * (b(i) - sum(A(i,:) * x) + A(i, i) * x(i)) / A(i, i)
-            end do
+
+            do i=1,n !loop over non-empty cells representing the populations of that cell
+                icell = tab_index_cell(i)
+                diag(:) = matdiag(A(:,:,i,1),nl) 
+                ! write(*,*) i, icell
+                ! write(*,*) "x=", x(:,icell)
+                ! write(*,*) "diag=", diag
+                ! write(*,*) "A.x=",matmul(A(:,:,i,1),x(:,icell))
+                x_new(:,icell) = x(:,icell) + &
+                    omega * (b(:,1) - matmul(A(:,:,i,1),x(:,icell))) / diag(:)
+                do j=1,m!loop over neighbours of the cell i
+                    icell_n = tab_index_neighb(i,j) !neighbour cell inb (j) of cell icell (i)
+                    diag(:) = matdiag(A(:,:,i,j+1),nl) 
+                    x_new(:,icell) = x(:,icell) + &
+                        omega * (b(:,j) - matmul(A(:,:,i,j+1),x(:,icell_n))) / diag(:)
+                    write(*,*) "toto"
+                enddo
+            enddo
+
+            ! do i = 1, n
+            !     x_new(i) = (1.0 - omega) * x(i) + omega * (b(i) - sum(A(i,:) * x) + A(i, i) * x(i)) / A(i, i)
+            ! end do
 
             ! Calculate the error and check for convergence
-            diff = maxval(abs(x_new - x))
-            converged = (error < tol)
+            diff = maxval(abs(x_new - x)/x,mask=x>0)
+            lconverged = (diff < tol)
 
             ! Update x for the next iteration
             x = x_new
             if (niter > nIterMax) exit
 
-            ! write(*, '(A, I5, A, F10.6)') "Iteration ", iter, ": Error = ", diff
+            ! write(*, *) "Iteration ", niter, ": Error = ", diff
         end do
+        x = x_new
+        deallocate(x_new)
+        write(*, *) "Iteration ", niter, ": Error = ", diff
 
         return
     end subroutine jacobi_sparse_nlocal_see
+
+    subroutine update_populations_nonlocal(iterate_ne)
+    ! --------------------------------------------------------------------!
+    ! Performs a solution of SEE for each atom and simultneously solves
+    ! the charge conservation equations for hydrogen and helium.          !
+    ! To do: implements Ng's acceleration iteration here
+    ! --------------------------------------------------------------------!
+        logical, intent(in) :: iterate_ne
+        type(AtomType), pointer :: at
+        integer :: nact
+        !-> not yet
+        ! if (iterate_ne) then
+        !     !all atoms + ne at the same time
+        !     ! call nlocal_see_atoms_ne()
+        ! else
+            do nact=1, Nactiveatoms
+                at => activeatoms(nact)%p
+                !the rate matrix is already filled
+                call nlocal_SEE_atom(at)
+            enddo
+            at => null()
+        ! endif
+
+        return
+    end subroutine update_populations_nonlocal
 
     subroutine rate_matrix(id)
         integer, intent(in) :: id

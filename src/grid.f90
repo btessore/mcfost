@@ -405,7 +405,6 @@ subroutine count_neighbours(n,order)
       enddo
       n = max(m,n)
    enddo
-   write(*,*) "The number max of neighbours for each cell is ", n
 
    return
 end subroutine count_neighbours
