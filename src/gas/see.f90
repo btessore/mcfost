@@ -101,7 +101,8 @@ module see
             atom => ActiveAtoms(n)%p
             !the +1 represent the local point (cell), not counted in the neighbours by convention.
             !if no neighbours, the matrix is a system of NlevelxNlevel equations per cells, unaffected by other cells.
-            allocate(atom%w(n_non_empty_cells*atom%Nlevel,(n_neighbours_max+1)*atom%Nlevel),stat=alloc_status)
+            ! allocate(atom%w(n_non_empty_cells*atom%Nlevel,(n_neighbours_max+1)*atom%Nlevel),stat=alloc_status)
+            allocate(atom%w(atom%Nlevel,atom%Nlevel,n_non_empty_cells,n_neighbours_max+1),stat=alloc_status)
             if (alloc_Status > 0) then
                 write(*,*) 8 * n_non_empty_cells*atom%Nlevel * (n_neighbours_max+1)*atom%Nlevel / 1024.**3, 'GB'
                 call error("Allocation error atom%w")
@@ -454,13 +455,70 @@ to make sure that the inversion of this matrix lead to the LTE solution like the
                     call init_colrates_atom(id,at)
                     call collision_rates_atom_loc(id0,icell,at)
                 endif
-                at%w
+                !init
+                at%w(:,:,i,:) = 0.0_dp
+                !1 because the off-diagonals (neighbours) do not contribute to the collision rates.
+                !col for transition i, j, at (non-empty) cell i for "neigbour" 1 (the cell i)
+                at%w(i,j,i,1) =
             enddo
         enddo    
         at => null()
 
         return
     end subroutine collision_rate_matrix
+
+    subroutine jacobi_sparse_nlocal_see(nl,n,m,A,x,b,niter,diff)
+    ! Note: In principle could go to utils.f90. However, this routine is so specific
+    ! to how we solve the non-local multi-level populations, that it cannot be used
+    ! for general Ax = b systems.
+    !
+    ! Solve a set of linear equations Ax = b with the Jacobi  method.
+    ! Here, x is the population vectors (nlevel,n_cells) and A, is a large sparse, 
+    ! block matrix (nlevel,nlevel,n_non_empty_cells,n_neighbours_max) tha contain
+    ! a set of SEE for each cell taking into account the coupling with the neighbours.
+    ! matrix vector multiplication of the type Ax, are therefore fine tuned for that problem.
+
+        real(kind=dp), parameter :: tol = 1e-6 ! Convergence tolerance
+        !eventually, omega would be defined as a function of the eigen values of A
+        real(kind=dp), parameter :: omega = 1.0 ! Damping factor (0 < omega < 1)
+        integer, parameter :: nIterMax = 50
+
+        integer, intent(in) :: nl, n, m
+        real(kind=dp), intent(in) :: A(nl, nl, n, m), b(nl,n)
+        real(kind=dp), intent(inout) :: x(nl,n)
+        !to monitor convergence or not
+        integer, intent(out) :: niter
+        real(kind=dp), intent(out) :: diff
+
+        logical :: lconverged
+        integer :: i, j
+
+        !initial solution = previous values of x
+
+        diff = 0
+        niter = 0
+        lconverged = .false.
+        do while (.not. lconverged)
+            iter = iter + 1
+
+            ! Calculate the new x values using the damped Jacobi method
+            do i = 1, n
+                x_new(i) = (1.0 - omega) * x(i) + omega * (b(i) - sum(A(i,:) * x) + A(i, i) * x(i)) / A(i, i)
+            end do
+
+            ! Calculate the error and check for convergence
+            diff = maxval(abs(x_new - x))
+            converged = (error < tol)
+
+            ! Update x for the next iteration
+            x = x_new
+            if (niter > nIterMax) exit
+
+            ! write(*, '(A, I5, A, F10.6)') "Iteration ", iter, ": Error = ", diff
+        end do
+
+        return
+    end subroutine jacobi_sparse_nlocal_see
 
     subroutine rate_matrix(id)
         integer, intent(in) :: id

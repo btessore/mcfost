@@ -375,7 +375,7 @@ subroutine count_neighbours(n,order)
    integer :: p, icell, i0, j0, k0, i, j, k, m
 
    if ((lcylindrical)) then
-      call error("(count_neighbours) Non-local alo not working for cylindrical grid") 
+      call warning("(count_neighbours) Non-local alo not tested for cylindrical grid yet") 
       return
    endif
 
