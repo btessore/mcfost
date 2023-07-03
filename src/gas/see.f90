@@ -452,19 +452,20 @@ module see
         type(AtomType), intent(inout) :: at
         real(kind=dp) :: dM
         integer :: niter, i
-        real(kind=dp), allocatable :: b(:,:)
+        real(kind=dp), allocatable :: b(:,:), ndag(:,:)
 
-        allocate(b(at%Nlevel,n_non_empty_cells))
+        allocate(b(at%Nlevel,n_non_empty_cells),ndag(at%Nlevel,n_cells))
         b(:,:) = 0.0
         !what is b in that contexte ?? 
-
-        call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%w,at%n,b,niter,dM)
+        ndag(:,:) = at%n
+        call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%w,b,at%n,niter,dM)
         deallocate(b)
 
         if (allocated(ngpop)) then
             ngpop(1:at%Nlevel,at%activeindex,:,1) = at%n(:,:)
-            ! atom%n(:,icell) = ndag !-> no need to reset, all populations are inverted at the same time
+            at%n(:,:) = ndag !to change that in the future with non-local inversion.
         endif
+        deallocate(ndag)
 
         return
     end subroutine nlocal_SEE_atom
@@ -497,10 +498,7 @@ module see
                 ! at%w(i,j,i,1) =
 
                 at%w(:,:,i,1) = at%Gamma(:,:,id0)
-                if (i==2) then
-                write(*,*) at%w(:,:,i,1)
-                write(*,*) matdiag(at%w(:,:,i,1),at%Nlevel)
-                endif
+ 
             enddo
         enddo    
         at => null()
@@ -533,6 +531,7 @@ module see
         integer, intent(in) :: id, icell
         type(AtomType), pointer :: at
         integer :: nact
+        return
 
         do nact=1, Nactiveatoms
             at => activeatoms(nact)%p
@@ -546,7 +545,7 @@ module see
         return
     end subroutine test_fill_digonal_w
 
-    subroutine jacobi_sparse_nlocal_see(nl,n,m,A,x,b,niter,diff)
+    subroutine jacobi_sparse_nlocal_see(nl,n,m,A,b,x,niter,diff)
     ! Note: In principle could go to utils.f90. However, this routine is so specific
     ! to how we solve the non-local multi-level populations, that it cannot be used
     ! for general Ax = b systems.
@@ -564,19 +563,20 @@ module see
 
         integer, intent(in) :: nl, n, m
         real(kind=dp), intent(in) :: A(nl, nl, n, m), b(nl,n)
-        real(kind=dp), intent(inout) :: x(nl,n)
+        real(kind=dp), intent(inout) :: x(nl,*)
         !to monitor convergence or not
         integer, intent(out) :: niter
         real(kind=dp), intent(out) :: diff
 
         logical :: lconverged
-        integer :: i, j, icell,icell_n
-        real(kind=dp) :: diag(nl)
-        real(kind=dp), allocatable :: x_new(:,:)
+        integer :: i, j, icell,icell_n, il
+        real(kind=dp) :: diag(nl), x_new(nl,n)
+        ! real(kind=dp), allocatable :: x_new(:,:)
 
         !initial solution = previous values of x
-        allocate(x_new(nl,n))
-        x_new = x
+        do i=1,n
+            x_new(:,i) = x(:,tab_index_cell(i))
+        enddo
 
         diff = 0
         niter = 0
@@ -593,15 +593,21 @@ module see
                 ! write(*,*) "x=", x(:,icell)
                 ! write(*,*) "diag=", diag
                 ! write(*,*) "A.x=",matmul(A(:,:,i,1),x(:,icell))
-                x_new(:,icell) = x(:,icell) + &
-                    omega * (b(:,1) - matmul(A(:,:,i,1),x(:,icell))) / diag(:)
-                do j=1,m!loop over neighbours of the cell i
-                    icell_n = tab_index_neighb(i,j) !neighbour cell inb (j) of cell icell (i)
-                    diag(:) = matdiag(A(:,:,i,j+1),nl) 
-                    x_new(:,icell) = x(:,icell) + &
-                        omega * (b(:,j) - matmul(A(:,:,i,j+1),x(:,icell_n))) / diag(:)
-                    write(*,*) "toto"
+
+                ! x_new(:,icell) = x(:,icell) + &
+                !     omega * (b(:,1) - matmul(A(:,:,i,1),x(:,icell))) / diag(:)
+
+                do il=1,nl
+                    x_new(il,i) = x(il,icell) + (b(il,i) - sum(A(:,il,i,1)*x(:,icell)))/diag(il)
                 enddo
+
+                ! do j=1,m!loop over neighbours of the cell i
+                !     icell_n = tab_index_neighb(i,j) !neighbour cell inb (j) of cell icell (i)
+                !     diag(:) = matdiag(A(:,:,i,j+1),nl) 
+                !     x_new(:,icell) = x(:,icell) + &
+                !         omega * (b(:,j) - matmul(A(:,:,i,j+1),x(:,icell_n))) / diag(:)
+                !     write(*,*) "toto"
+                ! enddo
             enddo
 
             ! do i = 1, n
@@ -609,17 +615,27 @@ module see
             ! end do
 
             ! Calculate the error and check for convergence
-            diff = maxval(abs(x_new - x)/x,mask=x>0)
+            ! diff = maxval(abs(x_new - x)/x,mask=x>0)
+            diff = 0.0
+            do i=1,n
+                diff = max(diff, maxval(abs(x_new(:,i) - x(:,tab_index_cell(i)))/ x(:,tab_index_cell(i))))
+            enddo
             lconverged = (diff < tol)
 
             ! Update x for the next iteration
-            x = x_new
+            do i=1,n
+                x(:,tab_index_cell(i)) = x(:,i)
+            enddo
+            ! x = x_new
             if (niter > nIterMax) exit
 
             ! write(*, *) "Iteration ", niter, ": Error = ", diff
         end do
-        x = x_new
-        deallocate(x_new)
+        ! x = x_new
+        ! deallocate(x_new)
+        ! do i=1,n
+        !     x(:,tab_index_cell(i)) = x(:,i)
+        ! enddo
         write(*, *) "Iteration ", niter, ": Error = ", diff
 
         return
@@ -634,6 +650,8 @@ module see
         logical, intent(in) :: iterate_ne
         type(AtomType), pointer :: at
         integer :: nact
+
+call collision_rate_matrix()
         !-> not yet
         ! if (iterate_ne) then
         !     !all atoms + ne at the same time
