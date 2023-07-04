@@ -26,7 +26,7 @@ module atom_transfer
         lnon_lte_loop, vlabs, calc_contopac_loc, set_max_damping, deactivate_lines, activate_lines, &
         activate_continua, deactivate_continua
    use see, only : ngpop, Neq_ng, ngpop, alloc_nlte_var, dealloc_nlte_var, frac_limit_pops, init_rates, update_populations, &
-      accumulate_radrates_mali, write_rates, init_radrates_atom, update_populations_nonlocal, test_fill_digonal_w
+      accumulate_radrates_mali, write_rates, init_radrates_atom, update_populations_nonlocal, fill_diagonal_gamma
    use optical_depth, only : integ_ray_atom
    use utils, only : cross_product, gauss_legendre_quadrature, progress_bar, rotation_3d, vacuum2air, &
          Ng_accelerate, Accelerate, check_ng_pops
@@ -416,10 +416,13 @@ module atom_transfer
                   !for electrons, we solve it locally, with the local rate matrix. Otherwise,
                   !we solve for all cells at the same time. Until I find something better
                   !to include non-local effects in the n-ne solutions.
-                  if ((l_iterate_ne.and.icompute_atomRT(icell)==1)) then
-                     call update_populations(id, icell, .true., diff)
-                  endif
-call test_fill_digonal_w(id,icell)
+                  ! if ((l_iterate_ne.and.icompute_atomRT(icell)==1)) then
+                  !    call update_populations(id, icell, .true., diff)
+                  ! endif
+                  call update_populations(id, icell, (l_iterate_ne.and.icompute_atomRT(icell)==1), diff)
+                  !reset at%gamma
+                  call fill_diagonal_gamma(id,icell)
+
                   ! ************************** NG's **************************!
                   ! accelerate locally, cell-by-cell for all levels only
                   ! ************************** END! **************************!
@@ -447,8 +450,9 @@ call test_fill_digonal_w(id,icell)
             ! **************  Solving for the populations **************!
             !Even if ellectrons have been solve with local rate matrix
             !we update the populations with the non-local version here
-
             call update_populations_nonlocal(.false.)
+            !TO DO add the convergence criterion here to remove some unsuded variable
+            !      add ng acc directly
 
             !***********************************************************!
 

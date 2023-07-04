@@ -231,7 +231,8 @@ function matdiag(A,n)
    !return the diagonal of a square matrix A(N,N)
    !as a vector of length n.
    integer, intent(in) :: n
-   real(kind=dp), intent(in) :: A(n*n)!A(n,n)
+   real(kind=dp), intent(in) :: A(n*n)
+   ! real(kind=dp), intent(in) :: A(n,n)
    real(kind=dp) :: matdiag(n)
    integer :: i
 
@@ -242,6 +243,48 @@ function matdiag(A,n)
 
    return
 end function matdiag
+
+subroutine Jacobi(a,b,x,n)
+!solve a system Ax=b with the iterative jacobi method
+   integer, intent(in) :: n
+   real(kind=dp) :: a(n,n), b(n)
+   real(kind=dp), intent(inout) :: x(n)
+
+   real(kind=dp), parameter :: tol = 1d-10 ! Convergence tolerance
+   !eventually, omega would be defined as a function of the eigen values of A
+   real(kind=dp), parameter :: omega = 1.0 ! Damping factor (0 < omega < 1)
+   integer, parameter :: nIterMax = 20000
+
+   integer :: niter, i
+   real(kind=dp) :: diff
+
+   logical :: lconverged
+   real(kind=dp) :: diag(n), x_new(n)
+
+   diff = 0
+   niter = 0
+   lconverged = .false.
+   do while (.not. lconverged)
+      niter = niter + 1
+
+      ! Calculate the new x values using the damped Jacobi method
+      diag(:) = matdiag(A,n)
+      x_new(:) = omega * (b(:) - matmul(A,x) + x(:) * diag(:)) / diag(:) + &
+            (1.0_dp - omega) * x(:)
+
+      diff = maxval(abs((x_new - x)/x_new))
+      lconverged = (diff < tol)
+
+      x = x_new
+      if (niter > nIterMax) exit
+
+      ! write(*, *) "Iteration ", niter, ": Error = ", diff
+   end do
+
+   ! write(*, *) "Iteration ", niter, ": Error = ", diff
+
+   return
+end subroutine jacobi
 
 subroutine GaussSlv(a, b, n)
   ! Resolution d'un systeme d'equation par methode de Gauss
