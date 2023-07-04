@@ -22,7 +22,10 @@ module Opacity_atom
    real(kind=dp), allocatable, dimension(:,:) :: chi_cont, eta_cont
    !local profile for cell id in direction iray for all atoms and b-b trans
    real(kind=dp), allocatable :: Itot(:,:,:), psi(:,:,:), phi_loc(:,:,:,:,:), vlabs(:,:)
+   !values for local operator: TO DO eta could be removed it is sum(Uji * n)
    real(kind=dp), allocatable :: eta_atoms(:,:,:), Uji_down(:,:,:,:), chi_up(:,:,:,:), chi_down(:,:,:,:), chi_tot(:), eta_tot(:)
+   !variable for the non-local operator
+   real(kind=dp), allocatable :: psi_odiag(:,:,:), Ujdown_odiag(:,:,:,:,:)!eta_odiag(:,:,:,:,:), 
    integer, parameter 		   :: NvspaceMax = 151
    logical 		               :: lnon_lte_loop
 

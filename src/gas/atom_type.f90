@@ -86,7 +86,8 @@ module atom_type
       logical                :: NLTEpops, set_ltepops
       real(kind=dp), allocatable :: Gamma(:,:,:), dgdne(:,:,:) !derivative of Gamma to ne (n_iterate_ne>0)
       real(kind=dp), dimension(:,:), pointer :: n, nstar
-      real(kind=dp), dimension(:,:,:), allocatable :: G_diag, G_odiag !diagonal and off-diagonal elements of the non-local rate matrix.
+      real(kind=dp), allocatable :: G_diag(:,:,:), G_odiag(:,:,:,:) !diagonal and off-diagonal elements of the non-local rate matrix.
+                                                                    !The diagonal is similar to Gamma, but on the whole grid.
       ! real(kind=dp), dimension(:,:) :: phi_T !such that nexphi_T = ni/nj
       type (AtomicLine), allocatable, dimension(:)         :: lines
       type (AtomicContinuum) , allocatable, dimension(:)   :: continua

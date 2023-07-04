@@ -78,6 +78,7 @@ subroutine set_default_variables()
   healpix_lmin = 0
   healpix_lmax = 7 !6 !5
   ! Atomic lines Radiative Transfer (AL-RT)
+  alo_order = 0
   lsepar_ori = .false.
   lsafe_stop = .false.
   safe_stop_time = 155520.0!1.8days in seconds, default
@@ -707,6 +708,12 @@ subroutine initialisation_mcfost()
         ! Option to solve for the RTE for atoms
         i_arg = i_arg+1
         lemission_atom=.true.
+     case("-ALO_order")
+        i_arg = i_arg + 1
+        if (i_arg > nbr_arg) call error("ALO order needed!")
+        call get_command_argument(i_arg,s)
+        read(s,*,iostat=ios) alo_order
+        i_arg= i_arg+1
      case("-output_rates")
         i_arg = i_arg + 1
         loutput_rates = .true.
@@ -2006,6 +2013,7 @@ subroutine display_help()
   write(*,*) "        : -cylindrical_rotation : forces Keplerian velocity independent of z"
   write(*,*) " "
   write(*,*) " Options related to atomic lines emission"
+  write(*,*) "        : -ALO_order <int> : Band the approximate Operator in MALI scheme (default 0)."
   !healpix options missing. Waiting finle adaptive scheme.
   write(*,*) "        : -start_step <int> : Select the first step for non-LTE loop (default 1)"
   write(*,*) "        : -end_step <int>   : Select the last step for non-LTE loop (default 2)"

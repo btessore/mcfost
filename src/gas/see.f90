@@ -9,7 +9,7 @@ module see
     use wavelengths_gas, only     : Nlambda_max_line, Nlambda_max_trans, Nlambda_max_cont, n_lambda_cont, &
          tab_lambda_cont, tab_lambda_nm
     use utils, only               : gaussslv, solve_lin, is_nan_infinity_vector, linear_1D_sorted, is_nan_infinity_matrix, jacobi
-    use opacity_atom, only : phi_loc, psi, chi_up, chi_down, uji_down, Itot, eta_atoms, chi_tot, eta_tot
+    use opacity_atom, only : phi_loc, psi, chi_up, chi_down, uji_down, Itot, eta_atoms, chi_tot, eta_tot, psi_odiag, Ujdown_odiag!, eta_odiag
     use messages, only : warning, error
     use collision_atom, only : collision_rates_atom_loc, collision_rates_hydrogen_loc
     use fits_utils, only : print_error
@@ -32,9 +32,7 @@ module see
 
     !-> move elsewhere probably, needed in optical_depth and other
     !variables for non-local ALO
-    integer, parameter :: alo_order = 0 ! alo_order = 0, n_neighbours_max = 0; alo_order = 1, n_neighbours_max represent the nearest neighbours.
-                                    !alo_order = 2, nearest neighbours of the nearest neighbours etc...
-
+    real(kind=dp), dimension(:,:), allocatable :: lambda_ij !elements of the approximate operator for a single transiton (to check sampling).
 
     contains
 
@@ -67,6 +65,7 @@ module see
             NmaxLine = max(NmaxLine,atom%Nline)
             NlevelTotal = NlevelTotal + atom%Nlevel
             Nmaxstage = max(NmaxStage,atom%Nstage)
+            !the local rate matrix, with diagonal operator
             allocate(atom%Gamma(atom%Nlevel,atom%Nlevel,nb_proc))
             mem_alloc_local = mem_alloc_local + sizeof(atom%Gamma)
             do kr=1, atom%Nline
@@ -96,23 +95,41 @@ module see
                 i = i + 1
                 tab_index_cell(i) = icell
                 tab_index_neighb(i,:) = index_neighbours(n_neighbours_max,icell,alo_order)
+                ! tab_index_i(icell) = i !to revert the expression to fasten the code
             endif
         enddo
         mem_alloc_non_local_alo = sizeof(tab_index_cell)+sizeof(tab_index_neighb)
+        allocate(lambda_ij(n_non_empty_cells,n_neighbours_max+1),stat=alloc_status)
+        write(*,*) " *** Allocating Lambda*_ij to check the sampling of neighbours in the non-local approximate op."
+        Lambda_ij = 0.0; mem_alloc_non_local_alo = mem_alloc_non_local_alo  + sizeof(Lambda_ij)
         do n=1, NactiveAtoms
             atom => ActiveAtoms(n)%p
-            !diagonal elements of the rate matrix for each cells
+            !diagonal elements of the rate matrix for each cells (like %gamma for each cell)
             allocate(atom%G_diag(atom%Nlevel,atom%Nlevel,n_non_empty_cells))
             !non-local elements (off-diagonal of the grand matrix Gamma.)
-            allocate(atom%G_odiag(atom%Nlevel,atom%Nlevel,n_neighbours_max),stat=alloc_status)
+            allocate(atom%G_odiag(atom%Nlevel,atom%Nlevel,n_non_empty_cells,n_neighbours_max),stat=alloc_status)
             if (alloc_Status > 0) then
-                write(*,*) 8 * (n_non_empty_cells+n_neighbours_max)*atom%Nlevel**2 / 1024.**3, 'GB'
+                write(*,*) 8 * (n_non_empty_cells*(1+n_neighbours_max))*atom%Nlevel**2 / 1024.**3, 'GB'
                 call error("Allocation error atom%w")
             endif
             mem_alloc_non_local_alo = mem_alloc_non_local_alo + sizeof(atom%G_odiag) + sizeof(atom%g_diag)
         enddo
         atom => null()
-
+        if (alo_order > 0) Then
+            allocate(psi_odiag(n_lambda, n_neighbours_max, nb_proc), stat=alloc_status); psi_odiag(:,:,:) = 0.0_dp
+            write(*,*) " size psi_odiag:", sizeof(psi_odiag) / 1024./1024./1024.," GB"
+            mem_alloc_non_local_alo = mem_alloc_non_local_alo + sizeof(psi_odiag)
+            if (alloc_Status > 0) call error("Allocation error psi_odiag in nlte loop")
+            ! allocate(eta_odiag(n_lambda,NactiveAtoms,n_neighbours_max, nb_proc),stat=alloc_status)
+            ! mem_alloc_non_local_alo = mem_alloc_non_local_alo + sizeof(eta_odiag)
+            ! if (alloc_Status > 0) call error("Allocation error eta_odiag")
+            ! write(*,*) " size eta_atoms:", sizeof(eta_odiag) / 1024./1024./1024.," GB"
+            allocate(Ujdown_odiag(n_lambda,Nmaxlevel,NactiveAtoms,n_neighbours_max,nb_proc),stat=alloc_status)
+            mem_alloc_non_local_alo = mem_alloc_non_local_alo + sizeof(Ujdown_odiag)
+            if (alloc_Status > 0) call error("Allocation error Ujdown_odiag")
+            write(*,*) " size Ujdown_odiag:", sizeof(Ujdown_odiag) / 1024./1024./1024.," GB"
+            !eta_odiag = sum_i Ujdown_odiag(dim=2) * n
+        endif
 
         !-> allocate space for non-LTE only quantities !
         ! NOTE: index 1 is always the current solution
@@ -266,6 +283,8 @@ module see
         deallocate(tab_Aji_cont, tab_Vij_cont)
 
         deallocate(tab_index_cell,tab_index_neighb)
+        if (allocated(lambda_ij)) deallocate(lambda_ij)
+        if (allocated(psi_odiag)) deallocate(psi_odiag,Ujdown_odiag)!,eta_odiag)
 
         do n=1, NactiveAtoms
             atom => ActiveAtoms(n)%p
@@ -319,7 +338,7 @@ module see
         real(kind=dp) :: ntotal, Gamma_dag(atom%Nlevel,atom%Nlevel) !debug
         real(kind=dp) :: dn_n
 
-    !if molecules (or H-), ntotal must be different from A*nHtot)
+        !if molecules (or H-), ntotal must be different from A*nHtot and found through chemical equilibrium.
         ntotal = atom%Abund*nHtot(icell) !in atomic form here. Could be stored on mem.
         ndag(:) = atom%n(:,icell) / ntotal
         !index of the equation to replace with mass conservation
@@ -343,12 +362,12 @@ module see
         Gamma_dag = atom%Gamma(:,:,id) !with diagonal
         atom%Gamma(imaxpop,:,id) = 1.0_dp
 
-    ! !solve for residual
+        ! solve for residual
         delta = atom%n(:,icell) - matmul(atom%Gamma(:,:,id), ndag)
 
         call GaussSlv(atom%Gamma(:,:,id), delta(:), atom%Nlevel)
    	    atom%n(:,icell) = ndag(:) + delta(:) ! * jacobi_sor
-    !     call gaussslv(atom%Gamma(:,:,id), atom%n(:,icell), atom%Nlevel)
+        ! call gaussslv(atom%Gamma(:,:,id), atom%n(:,icell), atom%Nlevel)
 
 
         if ((maxval(atom%n(:,icell)) < 0.0)) then
@@ -457,7 +476,7 @@ module see
         allocate(b(at%Nlevel,n_non_empty_cells),ndag(at%Nlevel,n_cells))
         b(:,:) = 0.0
         ndag(:,:) = at%n !to replace because the convergence is computed after inversion
-        !using the new iterate computed locally with at%gamma (=at%g_diah)
+        !using the new iterate computed locally with at%gamma (=at%g_diag)
         !as a starting solution.
         at%n = ngpop(1:at%Nlevel,at%activeindex,:,1)
 
@@ -467,6 +486,14 @@ module see
             b(imax,i) = at%Abund * nHtot(tab_index_cell(i))
             at%g_diag(imax,:,i) = 1.0_dp
         enddo
+
+        !debug: best to write psi at the centre of a the first line or integrated over phi
+        Lambda_ij(:,1) = at%g_diag(1,1,:)
+        Lambda_ij(:,2:) = at%g_odiag(1,1,:,:)
+        open(unit=23,file='lambda_ij.b',form='unformatted',access='stream',status='unknown')
+        write(23) n_non_empty_cells, n_neighbours_max + 1
+        write(23) Lambda_ij
+        close(23)
 
 
         call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_diag,at%g_odiag,b,at%n,niter,dM)
@@ -479,63 +506,6 @@ module see
 
         return
     end subroutine nlocal_SEE_atom
-
-    ! subroutine collision_rate_matrix()
-    ! !for all active atoms, fill the rate matrix with
-    ! ! collisional rates, for this ne and LTE pops.
-    ! ! We only have to run on the tab_index_cell and not the neighbours as
-    ! ! the collision rate matrix is digonal (right ?).
-    !     integer :: nact, id0, icell, i
-    !     type(AtomType), pointer :: at
-
-    !     id0 = 1
-    !     do nact=1, NactiveAtoms
-    !         at => ActiveAtoms(nact)%p
-    !         do i=1, n_non_empty_cells
-    !             icell = tab_index_cell(i)
-    !             if (at%id=='H') then
-    !                 call collision_rates_hydrogen_loc(id0,icell)
-    !             else
-    !                 call init_colrates_atom(id0,at)
-    !                 call collision_rates_atom_loc(id0,icell,at)
-    !             endif
-    !             !init
-    !             !radiative rates are 0
-    !             !tmp
-    !             call rate_matrix_atom(id0, at)
-    !             !1 because the off-diagonals (neighbours) do not contribute to the collision rates.
-    !             !col for transition i, j, at (non-empty) cell i for "neigbour" 1 (the cell i)
-    !             ! at%w(i,j,i,1) =
-
-    !             at%w(:,:,i,1) = at%Gamma(:,:,id0)
- 
-    !         enddo
-    !     enddo    
-    !     at => null()
-
-    !     return
-    ! end subroutine collision_rate_matrix
-
-    function i_icell(icell)
-    !for the cell icell on the grid, find the index i on the sub-grid
-    !containing only the non-empty cells.
-        integer :: i_icell
-        integer, intent(in) :: icell
-        integer :: i
-        ! integer, save :: i0 = 1
-
-        i_icell = 0
-        ! i_loop : do i=i0,n_non_empty_cells
-        i_loop : do i=1,n_non_empty_cells
-            if (tab_index_cell(i)==icell) then
-                i_icell = i
-                ! i0 = i !to start for the next cell from this point
-            endif
-        enddo i_loop
-
-
-        return
-    end function i_icell
 
     subroutine fill_diagonal_gamma(id,icell)
     !fill the diagonal of the grand matrix gamma for each atom locally with the local
@@ -566,7 +536,7 @@ module see
     ! Solve a set of linear equations Ax = b with the Jacobi  method. Where A is
     ! A = D + LU, with D the diagonal and LU the off-diagonal parts.
     ! Here, x is the population vectors (nlevel,n_cells) and A, is a large sparse, 
-    ! block matrix (nlevel,nlevel,n_non_empty_cells,n_neighbours_max) tha contain
+    ! block matrix (nlevel,nlevel,n_non_empty_cells,n_neighbours_max) that contain
     ! a set of SEE for each cell taking into account the coupling with the neighbours.
     ! matrix vector multiplication of the type Ax, are therefore fine tuned for that problem.
 
@@ -576,7 +546,7 @@ module see
         integer, parameter :: nIterMax = 500000
 
         integer, intent(in) :: nl, n, m
-        real(kind=dp), intent(in) :: D(nl, nl, n), LU(nl, nl, m), b(nl,n)
+        real(kind=dp), intent(in) :: D(nl, nl, n), LU(nl, nl, n, m), b(nl,n)
         real(kind=dp), intent(inout) :: x(nl,*)
         !to monitor convergence or not
         integer, intent(out) :: niter
@@ -601,9 +571,10 @@ module see
 
                 x_new(:,i) = omega * (b(:,i) - matmul(D(:,:,i),x(:,icell)) + diag(:)*x(:,icell)) / diag(:) + &
                             (1.0_dp - omega) * x(:,icell)
+
                 do j=1,m!loop over neighbours of the cell i
                     icell_n = tab_index_neighb(i,j) !neighbour cell icell_n (j) of cell icell (i)
-                    x_new(:,icell) = x_new(:,icell) - omega * matmul(LU(:,:,j),x(:,icell_n)) / diag(:)
+                    x_new(:,i) = x_new(:,i) - omega * matmul(LU(:,:,i,j),x(:,icell_n)) / diag(:)
                 enddo
 
             enddo

@@ -368,6 +368,27 @@ subroutine setup_grid()
 
 end subroutine setup_grid
 
+function i_icell(icell)
+   !for the cell icell on the grid, find the index i on the sub-grid
+   !containing only the non-empty cells.
+   integer :: i_icell
+   integer, intent(in) :: icell
+   integer :: i
+   ! integer, save :: i0 = 1
+
+   i_icell = 0
+   ! i_loop : do i=i0,n_non_empty_cells
+   i_loop : do i=1,n_non_empty_cells
+      if (tab_index_cell(i)==icell) then
+            i_icell = i
+            ! i0 = i !to start for the next cell from this point
+      endif
+   enddo i_loop
+
+
+   return
+end function i_icell
+
 subroutine count_neighbours(n,order)
 ! return the number max of neighbours for all cells
    integer, intent(out) :: n

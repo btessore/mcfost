@@ -55,6 +55,8 @@ module parametres
   character(len=512) :: tab_wavelength
 
   !gas transfer here
+  integer :: alo_order ! alo_order = 0, n_neighbours_max = 0; alo_order = 1, n_neighbours_max represent the nearest neighbours.
+                                    !alo_order = 2, nearest neighbours of the nearest neighbours etc...
 
   ! Emission moleculaire
   logical :: lemission_mol,  lpop, lprecise_pop, lmol_LTE, ldust_mol, lonly_top, lonly_bottom

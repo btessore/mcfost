@@ -11,7 +11,7 @@ module optical_depth
   use radiation_field, only : save_radiation_field
   use density
   use stars, only : intersect_stars, star_rad
-  use opacity_atom, only : opacity_atom_bb_loc, contopac_atom_loc, Itot, psi
+  use opacity_atom, only : opacity_atom_bb_loc, contopac_atom_loc, Itot, psi, psi_odiag
 
   implicit none
 
@@ -1101,7 +1101,8 @@ end subroutine optical_length_tot_mol
       real(kind=dp), dimension(N), intent(in) :: lambda
       real(kind=dp) :: x0, y0, z0, x1, y1, z1, l, l_contrib, l_void_before, Q, P(4)
       real(kind=dp), dimension(N) :: Snu, tau, dtau, chi, coronal_irrad
-      integer :: nbr_cell, icell, next_cell, previous_cell, icell_star, i_star, la, icell_prev
+      integer :: nbr_cell, icell, next_cell, previous_cell, icell_star, i_star, icell_prev
+      integer :: i, j
       logical :: lcellule_non_vide, lsubtract_avg, lintersect_stars
 
       x1=x;y1=y;z1=z
@@ -1113,6 +1114,9 @@ end subroutine optical_length_tot_mol
       tau(:) = 0.0_dp
 
       Itot(:,iray,id) = 0.0_dp
+
+      i = i_icell(icell_in) !index of cell icell_in on the sub-set of non empty cells.
+      !icell_in = tab_index_cell(i)
 
       ! Will the ray intersect a star
       call intersect_stars(x,y,z, u,v,w, lintersect_stars, i_star, icell_star)
@@ -1177,12 +1181,24 @@ end subroutine optical_length_tot_mol
 
             dtau(:) = l_contrib * chi(:) * AU_to_m !au * m^-1 * au_to_m
 
-            if (lsubtract_avg) then
-               !Lambda operator / chi_dag
-               !force PSI to be ray-by-ray but not ds !
-               !local, unaffected by vel.
-               psi(:,1,id) = ( 1.0_dp - exp( -dtau(:) ) ) / chi
-               ds(iray,id) = l_contrib * AU_to_m
+            if (labs) then
+               if (nbr_cell==1) then
+                  !Lambda operator / chi_dag
+                  !force PSI to be ray-by-ray but not ds !
+                  !local, unaffected by vel.
+                  psi(:,1,id) = ( 1.0_dp - exp( -dtau(:) ) ) / chi
+                  ds(iray,id) = l_contrib * AU_to_m
+               elseif (nbr_cell<n_neighbours_max+1) then
+                  boucle_voisin : do j=1,n_neighbours_max
+                     if (tab_index_neighb(i,j)==icell) then
+                        write(*,*) "cell", icell, " is a neighbour of ", icell_in
+                        psi_odiag(:,j,id) = exp(-tau) / chi * (1.0_dp * exp(-dtau))
+                        write(*,*) i, tab_index_cell(i), icell_in
+                        stop
+                        exit boucle_voisin
+                     endif
+                  enddo boucle_voisin
+               endif
             endif
 
             ! if (lorigine) then
