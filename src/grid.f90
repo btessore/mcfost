@@ -30,7 +30,8 @@ module grid
 
   integer :: n_non_empty_cells, n_neighbours_max ! number max of neighbours for each cell. Bounded by n_cells (large)
   integer, dimension(:), allocatable :: tab_index_cell !index of non-empty cells of the grid
-  integer, dimension(:,:), allocatable :: tab_index_neighb !index of neighbours for each cell
+  integer, dimension(:), allocatable :: tab_index_i !index of non-empty cells on the grid
+  integer, dimension(:,:), allocatable :: tab_index_neighb !index of neighbours for each non-empty cell
 
   contains
 

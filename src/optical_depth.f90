@@ -1115,7 +1115,7 @@ end subroutine optical_length_tot_mol
 
       Itot(:,iray,id) = 0.0_dp
 
-      i = i_icell(icell_in) !index of cell icell_in on the sub-set of non empty cells.
+      i = tab_index_i(icell_in) !index of cell icell_in on the sub-set of non empty cells.
       !icell_in = tab_index_cell(i)
 
       ! Will the ray intersect a star
@@ -1190,6 +1190,7 @@ end subroutine optical_length_tot_mol
                   ds(iray,id) = l_contrib * AU_to_m
                elseif (nbr_cell<n_neighbours_max+1) then
                   boucle_voisin : do j=1,n_neighbours_max
+                  !I can do better.
                      if (tab_index_neighb(i,j)==icell) then
                         psi_odiag(:,j,id) = exp(-tau) / chi * (1.0_dp * exp(-dtau))
                         exit boucle_voisin

@@ -89,20 +89,21 @@ module see
         !
         call count_neighbours(n_neighbours_max,alo_order) !2, 8, 26 for spherical grid 1D, 2D, 3D
 		n_non_empty_cells = size(pack(icompute_atomRT,mask=icompute_atomrt>0))
-		allocate(tab_index_cell(n_non_empty_cells))
+		allocate(tab_index_cell(n_non_empty_cells),tab_index_i(n_cells))
 		allocate(tab_index_neighb(n_non_empty_cells,n_neighbours_max))
         write(*,*) " --- The number of maximum neighbours for each cell is ", n_neighbours_max
         write(*,*) " --- There are ", n_non_empty_cells, " non-empty cells"
         i = 0
         do icell=1,n_cells
+            tab_index_i(icell) = 0
             if (icompute_atomrt(icell)>0) then
                 i = i + 1
                 tab_index_cell(i) = icell
+                tab_index_i(icell) = i
                 tab_index_neighb(i,:) = index_neighbours(n_neighbours_max,icell,alo_order)
-                ! tab_index_i(icell) = i !to revert the expression to fasten the code
             endif
         enddo
-        mem_alloc_non_local_alo = sizeof(tab_index_cell)+sizeof(tab_index_neighb)
+        mem_alloc_non_local_alo = sizeof(tab_index_cell)+sizeof(tab_index_neighb)+sizeof(tab_index_i)
         allocate(lambda_ij(n_non_empty_cells,n_neighbours_max+1),stat=alloc_status)
         write(*,*) " *** Allocating Lambda*_ij to check the sampling of neighbours in the non-local approximate op."
         Lambda_ij = 0.0; mem_alloc_non_local_alo = mem_alloc_non_local_alo  + sizeof(Lambda_ij)
@@ -468,7 +469,7 @@ module see
     !     integer :: nb, nr, i
     !     type(AtomType), pointer :: at = ActiveAtoms(nat)%p
 
-    !     i = i_icell(icell)
+    !     i = tab_index_i(icell)!i_icell(icell)
     !     nb = at%lines(kr)%Nb; nr = at%lines(kr)%Nr
     !     if (linit) Lambda_ij = 0.0
 
@@ -546,8 +547,7 @@ module see
             !it resets the rate matrix with given collisonal and radiative rates in case
             !local inversion are done (n_iterate_ne > 0).
             call rate_matrix_atom(id, at)
-            !i_icell is the index of the cell icell on the list of n_non_empty_cells.
-            at%g_diag(:,:,i_icell(icell)) = at%gamma(:,:,id)
+            at%g_diag(:,:,tab_index_i(icell)) = at%gamma(:,:,id)
             at => null()
         enddo
 
