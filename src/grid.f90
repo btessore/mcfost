@@ -382,6 +382,7 @@ function i_icell(icell)
    i_loop : do i=1,n_non_empty_cells
       if (tab_index_cell(i)==icell) then
             i_icell = i
+            if (tab_index_i(icell) /= i_icell) call error("error table i_icell!")
             ! i0 = i !to start for the next cell from this point
       endif
    enddo i_loop
