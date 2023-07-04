@@ -7,7 +7,7 @@ module see
     use gas_contopac, only        : H_bf_Xsection
     use wavelengths, only         :  n_lambda
     use wavelengths_gas, only     : Nlambda_max_line, Nlambda_max_trans, Nlambda_max_cont, n_lambda_cont, &
-         tab_lambda_cont, tab_lambda_nm
+         tab_lambda_cont, tab_lambda_nm, line_weights, cont_weights
     use utils, only               : gaussslv, solve_lin, is_nan_infinity_vector, linear_1D_sorted, is_nan_infinity_matrix, jacobi
     use opacity_atom, only : phi_loc, psi, chi_up, chi_down, uji_down, Itot, eta_atoms, chi_tot, eta_tot, psi_odiag, Ujdown_odiag!, eta_odiag
     use messages, only : warning, error
@@ -71,10 +71,14 @@ module see
             do kr=1, atom%Nline
                 allocate(atom%lines(kr)%Rij(nb_proc),atom%lines(kr)%Rji(nb_proc))
                 allocate(atom%lines(kr)%Cij(nb_proc),atom%lines(kr)%Cji(nb_proc))
+                call line_weights(atom%lines(kr))
+                mem_alloc_local = mem_alloc_local + sizeof(atom%lines(kr)%wei)
             enddo
             do kr=1, atom%Ncont
                 allocate(atom%continua(kr)%Rij(nb_proc),atom%continua(kr)%Rji(nb_proc))
                 allocate(atom%continua(kr)%Cij(nb_proc),atom%continua(kr)%Cji(nb_proc))
+                call cont_weights(atom%continua(kr),atom%continua(kr)%Nb,atom%continua(kr)%Nr,n_lambda,tab_lambda_nm)
+                mem_alloc_local = mem_alloc_local + sizeof(atom%continua(kr)%wei)
             enddo
             atom => null()
         enddo
@@ -215,6 +219,7 @@ module see
                         !     tab_Aji_cont(kr,n,icell) = tab_Aji_cont(kr,n,icell) + wl * fourpi_h * 0.5*(anu1*e1*b1 + anu2*e2*b2)
 
                         ! enddo
+                        !use cont%weights here
                         do l=1,atom%continua(kr)%Nr-atom%continua(kr)%Nb+1
                             if (l==1) then
                                wl = 0.5*(tab_lambda_nm(atom%continua(kr)%Nb+1)-tab_lambda_nm(atom%continua(kr)%Nb)) / &
@@ -454,6 +459,35 @@ module see
         return
     end subroutine see_atom
 
+    ! subroutine accumulate_lambda_ij(id,icell,nat,kr,linit,lstore)
+    ! !accumulate the lambda_ij values for the transition kr
+    ! !it serves as debug to check the sampling of the neighbours
+    ! !linked to the angular sampling.
+    !     integer, intent(in) :: id, kr, nat,icell
+    !     logical, intent(in) :: linit, lstore
+    !     integer :: nb, nr, i
+    !     type(AtomType), pointer :: at = ActiveAtoms(nat)%p
+
+    !     i = i_icell(icell)
+    !     nb = at%lines(kr)%Nb; nr = at%lines(kr)%Nr
+    !     if (linit) Lambda_ij = 0.0
+
+    !     Lamba_ij(i,1) = lambda_ij(i,1) + psi((nr-nb+1)/2,1,id)
+    !     Lambda_ij(:,2:) = Lambda_ij(:,2:) + psi_odiag((nr-nb+1)/2,:,id)
+
+    !     if (.not.lstore) return
+
+    !     !debug: best to write psi at the centre of a the first line or integrated over phi
+    !     ! Lambda_ij(:,1) = at%g_diag(1,1,:)
+    !     ! Lambda_ij(:,2:) = at%g_odiag(1,1,:,:)
+    !     open(unit=23,file='lambda_ij.b',form='unformatted',access='stream',status='unknown')
+    !     write(23) n_non_empty_cells, n_neighbours_max + 1
+    !     write(23) Lambda_ij
+    !     close(23)
+
+    !     return
+    ! end subroutine accumulate_lambda_ij
+
     subroutine nlocal_SEE_atom(at)
     ! --------------------------------------------------------------------!
     ! For atom at solves for the Statistical Equilibrium Equations (SEE)
@@ -482,19 +516,11 @@ module see
 
         !for each cell, replace an equation with the mass conservation.
         do i=1,n_non_empty_cells
+            !we replace the equation for the level with the highest population at the previous iteration, for each cell. 
             imax = locate(at%n(:,tab_index_cell(i)),maxval(at%n(:,tab_index_cell(i))))
             b(imax,i) = at%Abund * nHtot(tab_index_cell(i))
             at%g_diag(imax,:,i) = 1.0_dp
         enddo
-
-        !debug: best to write psi at the centre of a the first line or integrated over phi
-        Lambda_ij(:,1) = at%g_diag(1,1,:)
-        Lambda_ij(:,2:) = at%g_odiag(1,1,:,:)
-        open(unit=23,file='lambda_ij.b',form='unformatted',access='stream',status='unknown')
-        write(23) n_non_empty_cells, n_neighbours_max + 1
-        write(23) Lambda_ij
-        close(23)
-
 
         call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_diag,at%g_odiag,b,at%n,niter,dM)
         deallocate(b)

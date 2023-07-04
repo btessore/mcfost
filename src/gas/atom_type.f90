@@ -24,7 +24,7 @@ module atom_type
       integer :: Nb, Nr, Nlambda !global
       integer :: Nbc, Nrc, Nlambdac !cont
       real(kind=dp) :: lambda0, isotope_Frac, alpha0, lambdamin, lambdamax !continuum maximum frequency > frequency photoionisation
-      real(kind=dp), allocatable, dimension(:)  :: alpha, twohnu3_c2
+      real(kind=dp), allocatable, dimension(:)  :: alpha, twohnu3_c2, wei
       real(kind=dp), allocatable, dimension(:)  :: lambda_file, alpha_file
       real(kind=dp), allocatable, dimension(:)  :: Rij, Rji, Cij, Cji
       type (AtomType), pointer :: atom => NULL()
@@ -44,7 +44,7 @@ module atom_type
       real :: qwing
       real(kind=dp), allocatable, dimension(:)  :: Rij, Rji, Cij, Cji 
       real(kind=dp), dimension(4) :: cvdWaals
-      real(kind=dp), dimension(:), allocatable :: a
+      real(kind=dp), dimension(:), allocatable :: a, wei
       real(kind=dp), dimension(:,:,:,:,:), allocatable :: map !2d flux in the line
       ! real(kind=dp), dimension(:), allocatable :: u, pvoigt_eta, aeff, r, r1 !thomson approx. of Voigt.
       real(kind=dp), allocatable :: v(:), phi(:,:)

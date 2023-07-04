@@ -1723,6 +1723,74 @@ module wavelengths_gas
       return
    end subroutine make_wavelengths_flux
 
+   subroutine line_weights(line)
+      type(AtomicLine), intent(inout) :: line
+      integer :: Nb, Nr, Nl, la
+
+
+      Nb = line%Nb; Nr = line%Nr
+      Nl = Nr - Nb + 1
+      allocate(line%wei(Nl))
+      line%wei = 0.0
+
+      do la=1,Nl
+         if (la==1) then
+            line%wei(la) = 0.5*(tab_lambda_nm(Nb+1)-tab_lambda_nm(Nb)) * c_light / line%lambda0
+         elseif (la==Nl) then
+            line%wei(la) = 0.5*(tab_lambda_nm(Nr)-tab_lambda_nm(Nr-1)) * c_light / line%lambda0
+         else
+            line%wei(la) = 0.5*(tab_lambda_nm(Nb+la)-tab_lambda_nm(Nb+la-2)) * c_light / line%lambda0
+         endif
+      enddo
+
+      return
+   end subroutine line_weights
+
+   subroutine cont_weights(cont, n1, n2, n, x)
+      type(AtomicContinuum), intent(inout) :: cont
+      integer, intent(in) :: n1, n2, n
+      real(kind=dp), intent(in) :: x(n)
+      integer :: la, Nl
+
+
+      Nl = n2 - n1 + 1
+      allocate(cont%wei(Nl))
+      cont%wei = 0.0
+
+      do la=1,Nl
+         if (la==1) then
+            cont%wei(la) = 0.5*(x(N1+1)-x(N1)) / x(n1)
+         elseif (la==n) then
+            cont%wei(la) = 0.5*(x(N2)-x(N2-1)) / x(n2)
+         else
+            cont%wei(la) = 0.5*(tab_lambda_nm(n1+la)-tab_lambda_nm(n1+la-2)) / x(n1-1+la)
+         endif
+      enddo
+
+      return
+   end subroutine cont_weights
+
+
+   function dlambda(n, x)
+      integer, intent(in) :: n
+      real(kind=dp), intent(in) :: x(n)
+      real(kind=dp) :: dlambda(n)
+      integer :: la
+
+
+      do la=1, n
+         if (la==1) then
+            dlambda(la) = 0.5*(x(la+1)-x(la)) / x(la)
+         elseif (la==n) then
+            dlambda(la) = 0.5*(x(la)-x(la-1)) / x(la-1)
+         else
+            dlambda(la) = 0.5*(x(la+1)-x(la-1)) / x(la)
+         endif
+      enddo
+
+      return
+   end function dlambda
+
  end module wavelengths_gas
 
    ! function line_u_grid_loc(k, line, N)

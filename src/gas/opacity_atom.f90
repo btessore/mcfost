@@ -400,10 +400,10 @@ module Opacity_atom
       real(kind=dp), intent(in), dimension(N) :: lambda
       real(kind=dp), intent(inout), dimension(N) :: chi, Snu
       real(kind=dp), intent(in) :: x, y, z, x1, y1, z1, u, v, w, l_void_before,l_contrib
-      integer :: nat, Nred, Nblue, kr, i, j, Nlam
-      real(kind=dp) :: dv
+      integer :: nat, Nred, Nblue, kr, i, j, Nlam, nact
+      real(kind=dp) :: dv, wphi
       type(AtomType), pointer :: atom
-      real(kind=dp), dimension(Nlambda_max_line) :: phi0
+      real(kind=dp), dimension(Nlambda_max_line) :: phi0, chil, Uji, wei_line
 
       dv = 0.0_dp
       if (lnon_lte_loop.and..not.iterate) then !not iterate but non-LTE
@@ -425,19 +425,6 @@ module Opacity_atom
 
             if ((atom%n(i,icell) - atom%n(j,icell)*atom%lines(kr)%gij) <= 0.0_dp) cycle tr_loop
 
-            ! if (abs(dv)>atom%lines(kr)%vmax) then
-            !    !move the profile to the red edge up to Nover_sup
-            !    !change Nlam ??
-            !    if (dv > 0) then
-            !       ! Nblue = Nred
-            !       Nred = atom%lines(kr)%Nover_sup
-            !       Nblue =  Nred - Nlam + 1
-            !    !move to the blue edge down to Nover_inf
-            !    else
-            !       ! Nred = Nblue
-            !       Nblue =  atom%lines(kr)%Nover_inf
-            !       Nred = Nlam + Nblue - 1
-            !    endif
             if (abs(dv)>1.0*vbroad(T(icell),Atom%weight, vturb(icell))) then
                Nred = atom%lines(kr)%Nover_sup
                Nblue = atom%lines(kr)%Nover_inf
@@ -448,42 +435,31 @@ module Opacity_atom
                                  x,y,z,x1,y1,z1,u,v,w,l_void_before,l_contrib)
             !to interpolate the profile we need to find the index of the first lambda on the grid and then increment
 
+            Uji(1:Nlam) = hc_fourPI * atom%lines(kr)%Aji * phi0(1:Nlam)
+            chil(1:Nlam) = atom%lines(kr)%Bij * phi0(1:Nlam) * (atom%n(i,icell) - atom%lines(kr)%gij*atom%n(j,icell))
 
-            chi(Nblue:Nred) = chi(Nblue:Nred) + &
-               hc_fourPI * atom%lines(kr)%Bij * phi0(1:Nlam) * (atom%n(i,icell) - atom%lines(kr)%gij*atom%n(j,icell))
+            chi(Nblue:Nred) = chi(Nblue:Nred) + hc_fourPI * chil(1:Nlam)
 
-            Snu(Nblue:Nred) = Snu(Nblue:Nred) + &
-               hc_fourPI * atom%lines(kr)%Aji * phi0(1:Nlam) * atom%n(j,icell)
+            Snu(Nblue:Nred) = Snu(Nblue:Nred) + Uji(1:Nlam) * atom%n(j,icell)
 
-! !-> check Gaussian profile  and norm.
-! ! -> check Voigt profile, for Lyman alpha mainly.
-! ! -> write a voigt profile (kr) and a gaussian one (the same for all in principle!)
-            ! if (kr==1 .and. atom%id=="H") then
-            !    !-> try large damped lines to test the maximum extension of the line.
-            !    ! phi0(1:Nlam) = Voigt(Nlam, 1d4, (lambda(Nblue:Nred)-atom%lines(kr)%lambda0)/atom%lines(kr)%lambda0 * C_LIGHT / vbroad(T(icell),Atom%weight, vturb(icell)))
-            !    !-> try pure gauss with the same grid as voigt (for testing low damping)
-            !    ! phi0(1:Nlam) = exp(-( (lambda(Nblue:Nred)-atom%lines(kr)%lambda0)/atom%lines(kr)%lambda0 * C_LIGHT / vbroad(T(icell),Atom%weight, vturb(icell)))**2)
-            !    open(1,file="prof.txt",status="unknown")
-            !    write(1,*) vbroad(T(icell),Atom%weight, vturb(icell)), atom%lines(kr)%lambda0
-            !    write(1,*) atom%lines(kr)%a(icell), maxval(atom%lines(kr)%a), minval(atom%lines(kr)%a,mask=nhtot>0)
-            !    do j=1,Nlam
-            !       write(1,*) lambda(Nblue+j-1),phi0(j)
-            !    enddo
-            !    close(1)
-            ! endif
-            ! if (.not.atom%lines(kr)%voigt .and. atom%id=="H") then
-            !    !maybe the similar grid for voigt is nice too ? core + wings ?
-            !    open(1,file="profg.txt",status="unknown")
-            !    write(1,*) vbroad(T(icell),Atom%weight, vturb(icell)), atom%lines(kr)%lambda0
-            !    do j=1,Nlam
-            !       write(1,*) lambda(Nblue+j-1),phi0(j)
-            !    enddo
-            !    close(1)
-            !    stop
-            ! endif
 
             if ((iterate.and.atom%active)) then
-               phi_loc(1:Nlam,atom%ij_to_trans(i,j),atom%activeindex,iray,id) = phi0(1:Nlam)
+               nact = atom%activeindex
+               phi_loc(1:Nlam,atom%ij_to_trans(i,j),nact,iray,id) = phi0(1:Nlam)
+               wei_line = atom%lines(kr)%wei
+               wphi = sum(atom%lines(kr)%wei * phi0(1:Nlam))
+               Uji_down(Nblue:Nred,j,nact,id) = Uji_down(Nblue:Nred,j,nact,id) + Uji(1:Nlam)
+
+               chi_down(Nblue:Nred,j,nact,id) = chi_down(Nblue:Nred,j,nact,id) + chil(1:nlam)*atom%lines(kr)%wei(:)/wphi
+               chi_up(Nblue:Nred,i,nact,id) = chi_up(Nblue:Nred,i,nact,id) + chil(1:nlam)*atom%lines(kr)%wei(:)/wphi
+
+               eta_atoms(Nblue:Nred,atom%activeindex,id) = eta_atoms(Nblue:Nred,nact,id) + Uji(1:Nlam) * atom%n(j,icell)
+               elseif((o>=1).and.(o<=n_o_diag)) then
+                  !but for neighboors point, the emissivity in that direction can be stored
+                  Ujdown_odiag(Nblue:Nred,j,nact,o,id) = Ujdown_odiag(Nblue:Nred,j,nact,o,id) + Uji(1:Nlam)
+                  ! eta_odiag(Nblue:Nred,j,nact,o,id) = eta_odiag(Nblue:Nred,j,nact,o,id) + Uji(1:Nlam) * atom%n(j,icell)!&
+                  !    ! hc_fourPI * atom%lines(kr)%Aji * phi0(1:Nlam) * atom%n(j,icell)
+               endif 
             endif
 
 

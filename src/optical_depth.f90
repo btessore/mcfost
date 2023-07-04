@@ -1191,10 +1191,7 @@ end subroutine optical_length_tot_mol
                elseif (nbr_cell<n_neighbours_max+1) then
                   boucle_voisin : do j=1,n_neighbours_max
                      if (tab_index_neighb(i,j)==icell) then
-                        write(*,*) "cell", icell, " is a neighbour of ", icell_in
                         psi_odiag(:,j,id) = exp(-tau) / chi * (1.0_dp * exp(-dtau))
-                        write(*,*) i, tab_index_cell(i), icell_in
-                        stop
                         exit boucle_voisin
                      endif
                   enddo boucle_voisin
