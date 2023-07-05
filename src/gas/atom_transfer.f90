@@ -22,9 +22,10 @@ module atom_transfer
                            maxval_cswitch_atoms, lcswitch_enabled, vbroad
    use init_mcfost, only :  nb_proc
    use gas_contopac, only : background_continua_lambda
-   use opacity_atom, only : alloc_atom_opac, Itot, psi, dealloc_atom_opac, xcoupling, write_opacity_emissivity_bin, &
+                                                                        !xcoupling, 
+   use opacity_atom, only : alloc_atom_opac, Itot, psi, dealloc_atom_opac, write_opacity_emissivity_bin, &
         lnon_lte_loop, vlabs, calc_contopac_loc, set_max_damping, deactivate_lines, activate_lines, &
-        activate_continua, deactivate_continua
+        activate_continua, deactivate_continua, cells_id
    use see, only : ngpop, Neq_ng, ngpop, alloc_nlte_var, dealloc_nlte_var, frac_limit_pops, init_rates, update_populations, &
       accumulate_radrates_mali, write_rates, init_radrates_atom, update_populations_nonlocal, fill_diagonal_gamma
    use optical_depth, only : integ_ray_atom
@@ -211,6 +212,7 @@ module atom_transfer
       if (allocated(ds)) deallocate(ds)
       allocate(ds(one_ray,nb_proc))
       allocate(vlabs(one_ray,nb_proc))
+      allocate(cells_id(nb_proc))
       allocate(lcell_converged(n_cells),stat=alloc_status)
       if (alloc_Status > 0) call error("Allocation error lcell_converged")
       write(*,*) " size lcell_converged:", sizeof(lcell_converged) / 1024./1024./1024.," GB"
@@ -219,8 +221,8 @@ module atom_transfer
       write(*,*) " size diff_loc:", 2*sizeof(diff_loc) / 1024./1024./1024.," GB"
       write(*,*) ""
 
-      !-> negligible
-      mem_alloc_local = mem_alloc_local + sizeof(ds) + sizeof(stream)
+      mem_alloc_local = mem_alloc_local + sizeof(ds) + sizeof(stream) + sizeof(vlabs) + sizeof(cells_id)
+      mem_alloc_local = mem_alloc_local + 2*sizeof(diff_loc) + sizeof(lcell_converged)
       ! allocate(jnu(n_lambda,n_cells))
       ! write(*,*) " size Jnu:", sizeof(Jnu) / 1024./1024./1024.," GB"
       ! mem_alloc_local = mem_alloc_local + sizeof(jnu)
@@ -329,12 +331,14 @@ module atom_transfer
             !$omp private(l_iterate,weight,diff)&
             !$omp private(nact, at) & ! Acceleration of convergence
             !$omp shared(ne,ngpop,ng_index,Ng_Norder, accelerated, lng_turned_on, Jnu, iloc) & ! Ng's Acceleration of convergence
-            !$omp shared(lhealpix,lforce_lte,n_cells,voronoi,r_grid,z_grid,phi_grid,n_rayons,xmu,wmu,xmux,xmuy,n_cells_remaining) &
+            !$omp shared(lhealpix,lforce_lte,n_cells,voronoi,r_grid,z_grid,phi_grid,n_rayons,xmu,wmu,xmux,xmuy,n_cells_remaining,cells_id) &
             !$omp shared(pos_em_cellule,labs,n_lambda,tab_lambda_nm, icompute_atomRT,lcell_converged,diff_loc,seed,nb_proc,gtype) &
             !$omp shared(stream,n_rayons_mc,lvoronoi,ibar,n_cells_done,l_iterate_ne,Itot,omp_chunk_size,precision,lcswitch_enabled)
             !$omp do schedule(static,omp_chunk_size)
             do icell=1, n_cells
                !$ id = omp_get_thread_num() + 1
+               cells_id(id) = icell
+               write(*,*) "here=", cells_id(id), icell
                l_iterate = (icompute_atomRT(icell)>0)
                stream(id) = init_sprng(gtype, id-1,nb_proc,seed,SPRNG_DEFAULT)
                if( (diff_loc(icell) < 1d-2 * precision).and..not.lcswitch_enabled ) cycle
@@ -371,7 +375,7 @@ module atom_transfer
                         if (.not.lforce_lte) then
                            !-> cannot compute radiative rates here if lforce_lte
                            call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
-                           call xcoupling(id, icell,1)
+                           ! call xcoupling(id, icell,1)
                            call accumulate_radrates_mali(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
                         endif
@@ -404,7 +408,7 @@ module atom_transfer
                         !for one ray
                         if (.not.lforce_lte) then
                            call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
-                           call xcoupling(id,icell,1)
+                           ! call xcoupling(id,icell,1)
                            call accumulate_radrates_mali(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
                         endif
@@ -839,7 +843,7 @@ module atom_transfer
       call dealloc_nlte_var()
       deallocate(dM, dTM, Tex_ref, Tion_ref)
       deallocate(diff_loc, dne_loc)
-      deallocate(stream, ds, vlabs, lcell_converged)
+      deallocate(stream, ds, vlabs, lcell_converged, cells_id)
 
       ! --------------------------------    END    ------------------------------------------ !
       lnon_lte_loop = .false.
@@ -956,6 +960,7 @@ module atom_transfer
       if (allocated(ds)) deallocate(ds)
       allocate(ds(one_ray,nb_proc))
       allocate(vlabs(one_ray,nb_proc))
+      allocate(cells_id(nb_proc))
       allocate(lcell_converged(n_cells),stat=alloc_status)
       if (alloc_Status > 0) call error("Allocation error lcell_converged")
       write(*,*) " size lcell_converged:", sizeof(lcell_converged) / 1024./1024./1024.," GB"
@@ -964,8 +969,8 @@ module atom_transfer
       write(*,*) " size diff_loc:", 2*sizeof(diff_loc) / 1024./1024./1024.," GB"
       write(*,*) ""
 
-      !-> negligible
-      mem_alloc_local = mem_alloc_local + sizeof(ds) + sizeof(stream)
+      mem_alloc_local = mem_alloc_local + sizeof(ds) + sizeof(stream) + sizeof(vlabs) + sizeof(cells_id)
+      mem_alloc_local = mem_alloc_local + 2*sizeof(diff_loc) + sizeof(lcell_converged)
       ! allocate(jnu(n_lambda,n_cells))
       ! write(*,*) " size Jnu:", sizeof(Jnu) / 1024./1024./1024.," GB"
       ! mem_alloc_local = mem_alloc_local + sizeof(jnu)
@@ -1091,12 +1096,13 @@ module atom_transfer
             !$omp private(l_iterate,weight,diff)&
             !$omp private(nact, at) & ! Acceleration of convergence
             !$omp shared(ne,ngpop,ng_index,Ng_Norder, accelerated, lng_turned_on, Jnu, iloc) & ! Ng's Acceleration of convergence
-            !$omp shared(etape,lforce_lte,n_cells,voronoi,r_grid,z_grid,phi_grid,n_rayons,xmu,wmu,xmux,xmuy,n_cells_remaining) &
+            !$omp shared(etape,lforce_lte,n_cells,voronoi,r_grid,z_grid,phi_grid,n_rayons,xmu,wmu,xmux,xmuy,n_cells_remaining,cells_id) &
             !$omp shared(pos_em_cellule,labs,n_lambda,tab_lambda_nm, icompute_atomRT,lcell_converged,diff_loc,seed,nb_proc,gtype) &
             !$omp shared(stream,n_rayons_mc,lvoronoi,ibar,n_cells_done,l_iterate_ne,Itot,omp_chunk_size,precision,lcswitch_enabled)
             !$omp do schedule(static,omp_chunk_size)
             do icell=1, n_cells
                !$ id = omp_get_thread_num() + 1
+               cells_id(id) = icell
                l_iterate = (icompute_atomRT(icell)>0)
                stream(id) = init_sprng(gtype, id-1,nb_proc,seed,SPRNG_DEFAULT)
                if( (diff_loc(icell) < 1d-1 * precision).and..not.lcswitch_enabled ) cycle
@@ -1133,7 +1139,7 @@ module atom_transfer
                         if (.not.lforce_lte) then
                            !-> cannot compute radiative rates here if lforce_lte
                            call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
-                           call xcoupling(id, icell,1)
+                           ! call xcoupling(id, icell,1)
                            call accumulate_radrates_mali(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
                         endif
@@ -1166,7 +1172,7 @@ module atom_transfer
                         !for one ray
                         if (.not.lforce_lte) then
                            call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
-                           call xcoupling(id,icell,1)
+                           ! call xcoupling(id,icell,1)
                            call accumulate_radrates_mali(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
                         endif
@@ -1597,7 +1603,7 @@ module atom_transfer
       call dealloc_nlte_var()
       deallocate(dM, dTM, Tex_ref, Tion_ref)
       deallocate(diff_loc, dne_loc)
-      deallocate(stream, ds, vlabs, lcell_converged)
+      deallocate(stream, ds, vlabs, lcell_converged,cells_id)
 
       ! --------------------------------    END    ------------------------------------------ !
       lnon_lte_loop = .false.

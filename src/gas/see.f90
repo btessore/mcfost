@@ -9,7 +9,7 @@ module see
     use wavelengths_gas, only     : Nlambda_max_line, Nlambda_max_trans, Nlambda_max_cont, n_lambda_cont, &
          tab_lambda_cont, tab_lambda_nm, line_weights, cont_weights
     use utils, only               : gaussslv, solve_lin, is_nan_infinity_vector, linear_1D_sorted, is_nan_infinity_matrix, jacobi
-    use opacity_atom, only : phi_loc, psi, chi_up, chi_down, uji_down, Itot, eta_atoms, chi_tot, eta_tot, psi_odiag, Ujdown_odiag!, eta_odiag
+    use opacity_atom, only : phi_loc, psi, chi_up, chi_down, uji_down, Itot, eta_atoms, psi_odiag, Ujdown_odiag!, eta_odiag
     use messages, only : warning, error
     use collision_atom, only : collision_rates_atom_loc, collision_rates_hydrogen_loc
     use fits_utils, only : print_error
@@ -288,7 +288,7 @@ module see
 
         deallocate(tab_Aji_cont, tab_Vij_cont)
 
-        deallocate(tab_index_cell,tab_index_neighb)
+        deallocate(tab_index_cell,tab_index_neighb,tab_index_i)
         if (allocated(lambda_ij)) deallocate(lambda_ij)
         if (allocated(psi_odiag)) deallocate(psi_odiag,Ujdown_odiag)!,eta_odiag)
 
@@ -305,8 +305,6 @@ module see
             enddo
             atom => null()
         enddo
-
-        if (allocated(chi_tot)) deallocate(chi_tot,eta_tot)
 
         if (n_iterate_ne > 0) then
             deallocate(gtot,gr_save,dgrdne,dgcdne)

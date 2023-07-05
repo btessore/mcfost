@@ -1115,8 +1115,11 @@ end subroutine optical_length_tot_mol
 
       Itot(:,iray,id) = 0.0_dp
 
-      i = tab_index_i(icell_in) !index of cell icell_in on the sub-set of non empty cells.
-      !icell_in = tab_index_cell(i)
+      if (labs) then
+         i = tab_index_i(icell_in) !index of cell icell_in on the sub-set of non empty cells.
+         !icell_in = tab_index_cell(i)
+         write(*,*) "icell_in=",i, icell_in, tab_index_cell(i)
+      endif
 
       ! Will the ray intersect a star
       call intersect_stars(x,y,z, u,v,w, lintersect_stars, i_star, icell_star)
@@ -1175,7 +1178,7 @@ end subroutine optical_length_tot_mol
             ! opacities in m^-1, l_contrib in au
 
 
-            call contopac_atom_loc(icell, N, lambda, chi, Snu)
+            call contopac_atom_loc(id, icell, N, lambda, chi, Snu)
             call opacity_atom_bb_loc(id,icell,iray,x0,y0,z0,x1,y1,z1,u,v,w,&
                l_void_before,l_contrib,lsubtract_avg,N,lambda,chi,Snu)
 
@@ -1293,7 +1296,7 @@ subroutine physical_length_atom(id,icell_in,x,y,z,u,v,w,N,lambda,tau_threshold,f
       !count opacity only if the cell is filled, else go to next cell
       if (lcellule_non_vide) then
 
-         call contopac_atom_loc(icell, N, lambda, chi, eta)
+         call contopac_atom_loc(id, icell, N, lambda, chi, eta)
          call opacity_atom_bb_loc(id,icell,1,x0,y0,z0,x1,y1,z1,u,v,w,&
                l_void_before,l_contrib,lsubtract_avg,N,lambda,chi,eta)
 
