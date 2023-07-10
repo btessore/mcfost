@@ -23,12 +23,17 @@ module Opacity_atom
    !local profile for cell id in direction iray for all atoms and b-b trans
    real(kind=dp), allocatable :: Itot(:,:,:), psi(:,:,:), phi_loc(:,:,:,:,:), vlabs(:,:)
    integer, allocatable :: cells_id(:) !id of the cell on each proc during non-LTE loop.
-   !values for local operator: TO DO eta could be removed it is sum(Uji * n)
-   real(kind=dp), allocatable :: eta_atoms(:,:,:), Uji_down(:,:,:,:), chi_up(:,:,:,:), chi_down(:,:,:,:)
+   !values for local operator
+   real(kind=dp), allocatable :: Uji_down(:,:,:,:), chi_up(:,:,:,:), chi_down(:,:,:,:)
+   real(kind=dp), allocatable :: eta_atoms(:,:,:) !--> futur deprec, we will compute sum(Uji * n), a bit more time, save a bit memory
    !variable for the non-local operator
    real(kind=dp), allocatable :: psi_odiag(:,:,:), Ujdown_odiag(:,:,:,:,:)!eta_odiag(:,:,:,:,:), 
    integer, parameter 		   :: NvspaceMax = 151
    logical 		               :: lnon_lte_loop
+
+   !debug
+   real(kind=dp), dimension(:,:), allocatable :: lambda_ij !elements of the approximate operator for a single transiton (to check sampling).
+
 
    contains
 
@@ -488,6 +493,7 @@ module Opacity_atom
       type (AtomType), pointer :: at
       real(kind=dp) :: gij, wl, ni_on_nj_star, twohnu3_c2, wt
       real(kind=dp) :: term1(Nlambda_max_cont), term2(Nlambda_max_cont), term3(Nlambda_max_cont)
+      real(kind=dp) :: test (n_lambda)
 
       !if local point, icell == cells_id(id)
       llocal = (icell == cells_id(id))
@@ -499,10 +505,15 @@ module Opacity_atom
          eta_atoms(:,:,id) = 0.0_dp !future deprec ? eta = sum(Uji * n_j)
       else
          if (alo_order==0) return !no neighbour in that case !
+         !if the index is 0 because n_neighbour_cell < n_neighbour_max, we just add 0.0
+TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not working properly if icell_n = 0
+         psi_odiag(:,:,id) = 0.0_dp
          do m=1, n_neighbours_max
-            if (tab_index_neighb(tab_index_i(cells_id(id)),m)==icell) exit
+            if (tab_index_neighb(tab_index_i(cells_id(id)),m)==icell) then
+               Ujdown_odiag(:,:,:,m,id) = 0.0_dp
+               exit
+            endif
          enddo
-         Ujdown_odiag(:,:,:,m,id) = 0.0_dp
       endif
 
       at_loop : do nact=1, Nactiveatoms
@@ -600,6 +611,14 @@ module Opacity_atom
          at => null()
       enddo at_loop
 
+! write(*,*) "test :"
+! do j=1, hydrogen%Nlevel
+!    test(:) = test(:) + Uji_down(:,j,1,id) * hydrogen%n(j,icell)
+! enddo
+!    write(*,*) "t=",test
+!    write(*,*) "eta=", eta_atoms(:,1,id)
+!    write(*,*) "diff=", maxval(abs(eta_atoms(:,1,id)-test(:))/eta_atoms(:,1,id),mask=eta_atoms(:,1,id)>0)
+!    stop
     return
    end subroutine xcoupling_cont
 

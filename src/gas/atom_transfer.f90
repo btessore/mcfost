@@ -27,7 +27,7 @@ module atom_transfer
         lnon_lte_loop, vlabs, calc_contopac_loc, set_max_damping, deactivate_lines, activate_lines, &
         activate_continua, deactivate_continua, cells_id
    use see, only : ngpop, Neq_ng, ngpop, alloc_nlte_var, dealloc_nlte_var, frac_limit_pops, init_rates, update_populations, &
-      accumulate_radrates_mali, write_rates, init_radrates_atom, update_populations_nonlocal, fill_diagonal_gamma
+      accumulate_radrates, write_rates, init_radrates_atom, update_populations_nonlocal
    use optical_depth, only : integ_ray_atom
    use utils, only : cross_product, gauss_legendre_quadrature, progress_bar, rotation_3d, vacuum2air, &
          Ng_accelerate, Accelerate, check_ng_pops
@@ -338,10 +338,12 @@ module atom_transfer
             do icell=1, n_cells
                !$ id = omp_get_thread_num() + 1
                cells_id(id) = icell
-               write(*,*) "here=", cells_id(id), icell
+               ! write(*,*) "here=", cells_id(id), icell
                l_iterate = (icompute_atomRT(icell)>0)
                stream(id) = init_sprng(gtype, id-1,nb_proc,seed,SPRNG_DEFAULT)
-               if( (diff_loc(icell) < 1d-2 * precision).and..not.lcswitch_enabled ) cycle
+!currently better to do that otherwise, the non-diagonal and diagonal terms are not updated and set to 0 ??? 
+!while we inverse all cells at a time.
+               ! if( (diff_loc(icell) < 1d-2 * precision).and..not.lcswitch_enabled ) cycle
 
                if (l_iterate) then
 
@@ -376,7 +378,7 @@ module atom_transfer
                            !-> cannot compute radiative rates here if lforce_lte
                            call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
                            ! call xcoupling(id, icell,1)
-                           call accumulate_radrates_mali(id, icell,1, weight)
+                           call accumulate_radrates(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
                         endif
                         ! iloc(:,iray,icell) = Itot(:,1,id)
@@ -409,7 +411,7 @@ module atom_transfer
                         if (.not.lforce_lte) then
                            call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
                            ! call xcoupling(id,icell,1)
-                           call accumulate_radrates_mali(id, icell,1, weight)
+                           call accumulate_radrates(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
                         endif
                      enddo !iray
@@ -424,8 +426,6 @@ module atom_transfer
                   !    call update_populations(id, icell, .true., diff)
                   ! endif
                   call update_populations(id, icell, (l_iterate_ne.and.icompute_atomRT(icell)==1), diff)
-                  !reset at%gamma
-                  call fill_diagonal_gamma(id,icell)
 
                   ! ************************** NG's **************************!
                   ! accelerate locally, cell-by-cell for all levels only
@@ -1140,7 +1140,7 @@ module atom_transfer
                            !-> cannot compute radiative rates here if lforce_lte
                            call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
                            ! call xcoupling(id, icell,1)
-                           call accumulate_radrates_mali(id, icell,1, weight)
+                           call accumulate_radrates(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
                         endif
                         ! iloc(:,iray,icell) = Itot(:,1,id)
@@ -1173,7 +1173,7 @@ module atom_transfer
                         if (.not.lforce_lte) then
                            call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
                            ! call xcoupling(id,icell,1)
-                           call accumulate_radrates_mali(id, icell,1, weight)
+                           call accumulate_radrates(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
                         endif
                      enddo !iray

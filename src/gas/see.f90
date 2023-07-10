@@ -9,7 +9,7 @@ module see
     use wavelengths_gas, only     : Nlambda_max_line, Nlambda_max_trans, Nlambda_max_cont, n_lambda_cont, &
          tab_lambda_cont, tab_lambda_nm, line_weights, cont_weights
     use utils, only               : gaussslv, solve_lin, is_nan_infinity_vector, linear_1D_sorted, is_nan_infinity_matrix, jacobi
-    use opacity_atom, only : phi_loc, psi, chi_up, chi_down, uji_down, Itot, eta_atoms, psi_odiag, Ujdown_odiag!, eta_odiag
+    use opacity_atom, only : phi_loc, psi, chi_up, chi_down, uji_down, Itot, eta_atoms, psi_odiag, Ujdown_odiag, cells_id, lambda_ij!, eta_odiag
     use messages, only : warning, error
     use collision_atom, only : collision_rates_atom_loc, collision_rates_hydrogen_loc
     use fits_utils, only : print_error
@@ -29,10 +29,6 @@ module see
     real(kind=dp), allocatable :: gtot(:,:,:), gr_save(:,:,:,:), dgrdne(:,:,:), dgcdne(:,:,:)
     real(kind=dp), allocatable :: pops_ion(:,:,:), npop_dag(:,:)
     real(kind=dp), allocatable :: fvar(:,:), xvar(:,:), dfvar(:,:,:)!Jacobian
-
-    !-> move elsewhere probably, needed in optical_depth and other
-    !variables for non-local ALO
-    real(kind=dp), dimension(:,:), allocatable :: lambda_ij !elements of the approximate operator for a single transiton (to check sampling).
 
     contains
 
@@ -100,19 +96,21 @@ module see
                 i = i + 1
                 tab_index_cell(i) = icell
                 tab_index_i(icell) = i
+                ! 0 means there are less neighbours for that cell than n_neighbours_max.
                 tab_index_neighb(i,:) = index_neighbours(n_neighbours_max,icell,alo_order)
             endif
         enddo
         mem_alloc_non_local_alo = sizeof(tab_index_cell)+sizeof(tab_index_neighb)+sizeof(tab_index_i)
-        allocate(lambda_ij(n_non_empty_cells,n_neighbours_max+1),stat=alloc_status)
+        allocate(lambda_ij(n_cells,n_cells),stat=alloc_status)
         write(*,*) " *** Allocating Lambda*_ij to check the sampling of neighbours in the non-local approximate op."
         Lambda_ij = 0.0; mem_alloc_non_local_alo = mem_alloc_non_local_alo  + sizeof(Lambda_ij)
         do n=1, NactiveAtoms
             atom => ActiveAtoms(n)%p
             !diagonal elements of the rate matrix for each cells (like %gamma for each cell)
-            allocate(atom%G_diag(atom%Nlevel,atom%Nlevel,n_non_empty_cells))
+            allocate(atom%G_diag(atom%Nlevel,atom%Nlevel,n_non_empty_cells)) !built after the local see (at%gamma) is built
             !non-local elements (off-diagonal of the grand matrix Gamma.)
             allocate(atom%G_odiag(atom%Nlevel,atom%Nlevel,n_non_empty_cells,n_neighbours_max),stat=alloc_status)
+            !built locally, frequency-angle integrated, for all neighbours of a cell.
             if (alloc_Status > 0) then
                 write(*,*) 8 * (n_non_empty_cells*(1+n_neighbours_max))*atom%Nlevel**2 / 1024.**3, 'GB'
                 call error("Allocation error atom%w")
@@ -458,35 +456,6 @@ module see
         return
     end subroutine see_atom
 
-    ! subroutine accumulate_lambda_ij(id,icell,nat,kr,linit,lstore)
-    ! !accumulate the lambda_ij values for the transition kr
-    ! !it serves as debug to check the sampling of the neighbours
-    ! !linked to the angular sampling.
-    !     integer, intent(in) :: id, kr, nat,icell
-    !     logical, intent(in) :: linit, lstore
-    !     integer :: nb, nr, i
-    !     type(AtomType), pointer :: at = ActiveAtoms(nat)%p
-
-    !     i = tab_index_i(icell)!i_icell(icell)
-    !     nb = at%lines(kr)%Nb; nr = at%lines(kr)%Nr
-    !     if (linit) Lambda_ij = 0.0
-
-    !     Lamba_ij(i,1) = lambda_ij(i,1) + psi((nr-nb+1)/2,1,id)
-    !     Lambda_ij(:,2:) = Lambda_ij(:,2:) + psi_odiag((nr-nb+1)/2,:,id)
-
-    !     if (.not.lstore) return
-
-    !     !debug: best to write psi at the centre of a the first line or integrated over phi
-    !     ! Lambda_ij(:,1) = at%g_diag(1,1,:)
-    !     ! Lambda_ij(:,2:) = at%g_odiag(1,1,:,:)
-    !     open(unit=23,file='lambda_ij.b',form='unformatted',access='stream',status='unknown')
-    !     write(23) n_non_empty_cells, n_neighbours_max + 1
-    !     write(23) Lambda_ij
-    !     close(23)
-
-    !     return
-    ! end subroutine accumulate_lambda_ij
-
     subroutine nlocal_SEE_atom(at)
     ! --------------------------------------------------------------------!
     ! For atom at solves for the Statistical Equilibrium Equations (SEE)
@@ -506,6 +475,15 @@ module see
         real(kind=dp) :: local_sol(at%Nlevel)
         real(kind=dp), allocatable :: b(:,:), ndag(:,:)
 
+        !debug
+        if (allocated(lambda_ij)) then
+            open(unit=23,file='lambda_ij.b',form='unformatted',access='stream',status='unknown')
+            write(23) n_cells
+            write(23) Lambda_ij
+            close(23)
+            stop
+        endif
+
         allocate(b(at%Nlevel,n_non_empty_cells),ndag(at%Nlevel,n_cells))
         b(:,:) = 0.0
         ndag(:,:) = at%n !to replace because the convergence is computed after inversion
@@ -519,6 +497,7 @@ module see
             imax = locate(at%n(:,tab_index_cell(i)),maxval(at%n(:,tab_index_cell(i))))
             b(imax,i) = at%Abund * nHtot(tab_index_cell(i))
             at%g_diag(imax,:,i) = 1.0_dp
+            at%g_odiag(:,:,i,:) = 0.0_dp !local mass conservation
         enddo
 
         call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_diag,at%g_odiag,b,at%n,niter,dM)
@@ -532,25 +511,25 @@ module see
         return
     end subroutine nlocal_SEE_atom
 
-    subroutine fill_diagonal_gamma(id,icell)
-    !fill the diagonal of the grand matrix gamma for each atom locally with the local
-    !MALI rate matrix
-        integer, intent(in) :: id, icell
-        type(AtomType), pointer :: at
-        integer :: nact
+    ! subroutine fill_diagonal_gamma(id,icell)
+    ! !fill the diagonal of the grand matrix gamma for each atom locally with the local
+    ! !MALI rate matrix
+    !     integer, intent(in) :: id, icell
+    !     type(AtomType), pointer :: at
+    !     integer :: nact
 
-        do nact=1, Nactiveatoms
-            at => activeatoms(nact)%p
-            !once all rates have been accumulated (frequency and angle integrated)
-            !it resets the rate matrix with given collisonal and radiative rates in case
-            !local inversion are done (n_iterate_ne > 0).
-            call rate_matrix_atom(id, at)
-            at%g_diag(:,:,tab_index_i(icell)) = at%gamma(:,:,id)
-            at => null()
-        enddo
+    !     do nact=1, Nactiveatoms
+    !         at => activeatoms(nact)%p
+    !         !once all rates have been accumulated (frequency and angle integrated)
+    !         !it resets the rate matrix with given collisonal and radiative rates in case
+    !         !local inversion are done (n_iterate_ne > 0).
+    !         call rate_matrix_atom(id, at)
+    !         at%g_diag(:,:,tab_index_i(icell)) = at%gamma(:,:,id)
+    !         at => null()
+    !     enddo
 
-        return
-    end subroutine fill_diagonal_gamma
+    !     return
+    ! end subroutine fill_diagonal_gamma
 
     subroutine jacobi_sparse_nlocal_see(nl,n,m,D,LU,b,x,niter,diff)
     ! Note: In principle could go to utils.f90. However, this routine is so specific
@@ -715,6 +694,10 @@ module see
             !Gamma(i,i) = Rij + Cij = -sum(Gamma(j,i))
             atom%Gamma(l,l,id) = sum(-atom%Gamma(:,l,id)) !positive
         end do
+        
+        !fill the diagonal of the grand matrix gamma locally with the local SEE matrix.
+        !index of the non-LTE local cell is in cells_id.
+        atom%g_diag(:,:,tab_index_i(cells_id(id))) = atom%gamma(:,:,id)
 
 ! stop
         return
@@ -723,6 +706,11 @@ module see
     subroutine init_rates(id,icell)
         integer, intent(in) :: id, icell
         integer :: n
+
+        if (alo_order > 0) then
+            psi_odiag = 0.0_dp
+            Ujdown_odiag = 0.0_dp
+        endif
 
         do n=1,NactiveAtoms
             call init_radrates_atom(id,icell,ActiveAtoms(n)%p)
@@ -735,6 +723,8 @@ module see
                 call init_colrates_atom(id,ActiveAtoms(n)%p)
                 call collision_rates_atom_loc(id,icell,ActiveAtoms(n)%p)
             endif
+
+            activeatoms(n)%p%g_odiag(:,:,tab_index_i(icell),:) = 0.0_dp
         enddo
 
         return
@@ -788,17 +778,259 @@ module see
 
     end subroutine init_radrates_atom
 
+    subroutine accumulate_radrates(id, icell, iray, domega)
+    ! --------------------------------------------------------- !
+    ! Accumulate radiative rates for the MALI method.
+    !  Rates are integrated in frequency and accumulated
+    !  ray-by-ray.
+    !
+    ! BEWARE: Psi independent of iray (always index 1 in dim=2).
+    ! 
+    ! TO DO: - higher order frequency integration ---> need change
+    !        in the cross-coupling and the init_radrates too.
+    !        IT IS IMPORTANT to conserve the accuracy of all 
+    !        frequency integration for stability.
+    !        - level's dissolution.
+    ! --------------------------------------------------------- !
+        integer, intent(in) :: id, icell, iray
+        real(kind=dp), intent(in) :: dOmega
+        real(kind=dp), dimension(Nlambda_max_trans) :: ehnukt!, Ieff
+        real(kind=dp), dimension(Nlambda_max_line) :: phi0
+        real(kind=dp), dimension(n_lambda) :: Ieff
+        type(AtomType), pointer :: at
+        integer :: kr, i, j, Nl, Nr, Nb, nact
+        integer :: ip, jp, Nrp, Nbp, krr
+        real(kind=dp) :: jbar_up, jbar_down, xcc_down, xcc_up
+        real(kind=dp) :: wphi, ni_on_nj_star, gij
+        integer :: m, k
 
-!to do level dissolution
+TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not working properly if icell_n = 0
+
+        !ehnukt(:) = exp(hnu_k/T(icell)) --> defined only on tab_lambda_cont /= tab_lambda_nm !
+
+        atom_loop : do nact = 1, Nactiveatoms
+            at => ActiveAtoms(nact)%p
+
+            !Ieff = (Psi - Psi^\ast) eta
+            Ieff(:) = Itot(:,iray,id)! - Psi(:,1,id) * eta_atoms(:,nact,id)
+            do j=1, at%Nlevel
+                Ieff(:) = Ieff(:) - psi(:,1,id) * Uji_down(:,j,nact,id) * at%n(j,icell)
+            enddo
+            !adding the neighbours' contribution
+            if (alo_order > 0) Then
+                do j=1, at%Nlevel
+                    Ieff(:) = Ieff(:) - sum( psi_odiag(:,:,id) * Ujdown_odiag(:,j,nact,:,id)*at%n(j,tab_index_neighb(k,m)),dim=2 )
+                enddo
+                ! k = tab_index_i(icell)
+                ! do m=1, n_neighbours_max
+                !     if (tab_index_neighb(k,m)==0) cycle
+                !     !to check
+                !     !eta_atoms = sum_j Uji * n_j, here over the neighbour cells.
+                !     do j=1, at%Nlevel
+                !         Ieff(:) = Ieff(:) - psi_odiag(:,m,id) * Ujdown_odiag(:,j,nact,m,id)*at%n(j,tab_index_neighb(k,m))
+                !     enddo
+                ! enddo
+            endif
+
+            line_loop : do kr=1, at%Nline
+
+                if (.not.at%lines(kr)%lcontrib) cycle line_loop
+
+                Nr = at%lines(kr)%Nr; Nb = at%lines(kr)%Nb
+                i = at%lines(kr)%i
+                j = at%lines(kr)%j
+
+                Nl = Nr - Nb + 1
+
+                !get local profile for that cell id in the direction iray
+                phi0(1:Nl) = phi_loc(1:Nl,kr,nact,iray,id)
+                !-> otherwise phi_loc is 0 and there are normalisation issues with wphi
+                ! due to a condition in the opacit y routine.
+                if ((at%n(i,icell) - at%n(j,icell)*at%lines(kr)%gij) <= 0.0_dp) cycle line_loop
+
+                Jbar_up = 0.0
+                xcc_down = 0.0
+                wphi = 0.0
+
+                ! !(Psi - Psi^\ast) eta
+                ! Ieff(1:Nl) = Itot(Nb:Nr,iray,id) - Psi(Nb:Nr,1,id) * eta_atoms(Nb:Nr,nact,id)
+
+                Jbar_up = sum(Ieff(nb:nr)*phi0(1:Nl)*at%lines(kr)%wei)
+                wphi = sum(phi0(1:Nl)*at%lines(kr)%wei)
+                xcc_down = sum(chi_up(Nb:Nr,i,nact,id)*psi(Nb:Nr,1,id)*Uji_down(Nb:Nr,j,nact,id))
+
+                if (wphi <= 0.0) then
+                    call error("(accumulate_radrates) critical! wphi <= 0!")
+                endif
+                Jbar_up = Jbar_up / wphi
+
+                jbar_down = jbar_up
+
+                !init at Aji
+                at%lines(kr)%Rji(id) = at%lines(kr)%Rji(id) + dOmega * Jbar_down * at%lines(kr)%Bji
+                at%lines(kr)%Rij(id) = at%lines(kr)%Rij(id) + dOmega * Jbar_up * at%lines(kr)%Bij
+
+                !accumulate off-diagonal terms
+                if (alo_order > 0) then
+                    do m=1, n_neighbours_max
+                        if (tab_index_neighb(k,m)==0) cycle
+                        ! + because G(i,j) = -R_ji but Rji = Aji - xcc_down
+                        at%g_odiag(i,j,k,m) = at%g_odiag(i,j,k,m) + dOmega * &
+                            sum(chi_up(Nb:Nr,i,nact,id)*psi_odiag(Nb:Nr,m,id)*Ujdown_odiag(Nb:Nr,j,nact,m,id))
+                    enddo
+                endif
+
+                !cross-coupling terms + off-diagonal terms
+                xcc_up = 0.0_dp
+                do krr=1, at%Nline
+                    ip = at%lines(krr)%i
+                    jp = at%lines(krr)%j
+                    Nbp = at%lines(krr)%Nb
+                    Nrp = at%lines(krr)%Nr
+                    if (jp==i) then !i upper level of another transitions
+                        xcc_up = xcc_up + sum(chi_down(Nbp:Nrp,j,nact,id)*psi(Nbp:Nrp,1,id)*Uji_down(Nbp:Nrp,i,nact,id))
+                        if (alo_order > 0) then
+                            do m=1, n_neighbours_max
+                                if (tab_index_neighb(k,m)==0) cycle
+                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) + dOmega * &
+                                    sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
+                            enddo
+                        endif
+                    endif
+                enddo
+                do krr=1, at%Ncont
+                    ip = at%continua(krr)%i
+                    jp = at%continua(krr)%j
+                    Nbp = at%continua(krr)%Nb
+                    Nrp = at%continua(krr)%Nr
+                    if (jp==i) then !i upper level of another transitions
+                        xcc_up = xcc_up + sum(chi_down(Nbp:Nrp,j,nact,id)*psi(Nbp:Nrp,1,id)*Uji_down(Nbp:Nrp,i,nact,id))
+                        if (alo_order > 0) then
+                            do m=1, n_neighbours_max
+                                if (tab_index_neighb(k,m)==0) cycle
+                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) + dOmega * &
+                                    sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
+                            enddo
+                        endif
+                    endif
+                enddo
+
+                at%lines(kr)%Rji(id) = at%lines(kr)%Rji(id) - xcc_down * dOmega
+                at%lines(kr)%Rij(id) = at%lines(kr)%Rij(id) + xcc_up * dOmega
+
+                !debug
+                if ((allocated(lambda_ij)).and.(kr==1)) then
+                    lambda_ij(icell,icell) = lambda_ij(icell,icell) + dOmega * sum(psi(Nb:Nr,1,id))
+                    do m=1, n_neighbours_max
+                        if (tab_index_neighb(k,m)==0) cycle
+                        Lambda_ij(icell,tab_index_neighb(k,m)) = dOmega * sum(psi_odiag(Nb:Nr,m,id))
+                    enddo
+                endif
+
+            end do line_loop
+
+            cont_loop : do kr = 1, at%Ncont
+                if (.not.at%continua(kr)%lcontrib) cycle cont_loop
+
+                i = at%continua(kr)%i; j = at%continua(kr)%j
+
+                ! ni_on_nj_star = ne(icell) * phi_T(icell, at%g(i)/at%g(j), at%E(j)-at%E(i))
+                ni_on_nj_star = at%nstar(i,icell)/at%nstar(j,icell)
+                gij = ni_on_nj_star * exp(-hc_k/T(icell)/at%continua(kr)%lambda0)
+                if ((at%n(i,icell) - at%n(j,icell) * gij) <= 0.0_dp) cycle cont_loop
+
+                Nb = at%continua(kr)%Nb; Nr = at%continua(kr)%Nr
+                Nl = Nr - Nb + 1
+
+                Jbar_down = 0.0
+                Jbar_up = 0.0
+                xcc_down = 0.0
+
+                ! !(Psi - Psi^\ast) eta
+                ! Ieff(1:Nl) = Itot(Nb:Nr,iray,id) - Psi(Nb:Nr,1,id) * eta_atoms(Nb:Nr,nact,id)
+                ehnukt(1:Nl) = exp(-hc_k/tab_lambda_nm(nb:nr)/T(icell))
+
+                !Note tab_Vij_cont contains the photoionisation cross-section for each continuum
+                !on the non-LTE grid (tab_lambda_nm and not tab_lambda_cont). But, is has a size
+                !of Nlambda_max_cont > Nl < n_lambda
+                Jbar_up = sum(tab_Vij_cont(1:Nl,kr,nact)*Ieff(nb:nr)*at%continua(kr)%wei(:))
+                !the term proportional to 2hnu^3/c2 already included in %Rji = "Aji" for continua.
+                !exp(-hc_k/T(icell)/tab_lambda_nm(Nb:Nr))
+                Jbar_down = sum(ehnukt(1:nl)*tab_Vij_cont(1:Nl,kr,nact)*Ieff(nb:nr)*at%continua(kr)%wei(:))
+                xcc_down = sum(chi_up(Nb:Nr,i,nact,id)*Uji_down(Nb:Nr,j,nact,id)*psi(Nb:Nr,1,id))
+
+
+                at%continua(kr)%Rij(id) = at%continua(kr)%Rij(id) + dOmega*fourpi_h * Jbar_up
+                !init at tab_Aji_cont(kr,nact,icell) <=> Aji
+                at%continua(kr)%Rji(id) = at%continua(kr)%Rji(id) + dOmega*fourpi_h * Jbar_down * ni_on_nj_star
+
+                !accumulate off-diagonal terms
+                if (alo_order > 0) then
+                    do m=1, n_neighbours_max
+                        if (tab_index_neighb(k,m)==0) cycle
+                        ! + because G(i,j) = -R_ji but Rji = Aji - xcc_down
+                        at%g_odiag(i,j,k,m) = at%g_odiag(i,j,k,m) + dOmega * &
+                            sum(chi_up(Nb:Nr,i,nact,id)*psi_odiag(Nb:Nr,m,id)*Ujdown_odiag(Nb:Nr,j,nact,m,id))
+                    enddo
+                endif
+
+                !cross-coupling terms
+                xcc_up = 0.0_dp
+                do krr=1, at%Nline
+                    ip = at%lines(krr)%i
+                    jp = at%lines(krr)%j
+                    Nbp = at%lines(krr)%Nb
+                    Nrp = at%lines(krr)%Nr
+                    if (jp==i) then !i upper level of another transitions
+                        xcc_up = xcc_up + sum(chi_down(Nbp:Nrp,j,nact,id)*psi(Nbp:Nrp,1,id)*Uji_down(Nbp:Nrp,i,nact,id))
+                        if (alo_order > 0) then
+                            do m=1, n_neighbours_max
+                                if (tab_index_neighb(k,m)==0) cycle
+                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) + dOmega * &
+                                    sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
+                            enddo
+                        endif
+                    endif
+                enddo
+                do krr=1, at%Ncont
+                    ip = at%continua(krr)%i
+                    jp = at%continua(krr)%j
+                    Nbp = at%continua(krr)%Nb
+                    Nrp = at%continua(krr)%Nr
+                    if (jp==i) then !i upper level of another transitions
+                        xcc_up = xcc_up + sum(chi_down(Nbp:Nrp,j,nact,id)*psi(Nbp:Nrp,1,id)*Uji_down(Nbp:Nrp,i,nact,id))
+                        if (alo_order > 0) then
+                            do m=1, n_neighbours_max
+                                if (tab_index_neighb(k,m)==0) cycle
+                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) + dOmega * &
+                                    sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
+                            enddo
+                        endif
+                    endif
+                enddo
+
+                at%continua(kr)%Rji(id) = at%continua(kr)%Rji(id) - xcc_down * dOmega
+                at%continua(kr)%Rij(id) = at%continua(kr)%Rij(id) + xcc_up * dOmega
+
+            enddo cont_loop
+            at => NULL()
+
+        end do atom_loop
+
+        return
+    end subroutine accumulate_radrates
+
+    ! -> old, local and working routine.
     subroutine accumulate_radrates_mali(id, icell, iray, domega)
     ! --------------------------------------------------------- !
     ! Accumulate radiative rates for the MALI method.
     !  Rates are integrated in frequency and accumulated
     !  ray-by-ray.
     !
+    !
     ! BEWARE: Psi independent of iray (so iray can be different of 1 during sub-iter)
     !
-    !
+    ! TO DO: higher order frequency integ, level dissolution etc..
     ! --------------------------------------------------------- !
         integer, intent(in) :: id, icell, iray
         real(kind=dp), intent(in) :: dOmega
