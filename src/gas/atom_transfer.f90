@@ -182,6 +182,7 @@ module atom_transfer
          lhealpix = .true.
          i0 = min(lorder_min,healpix_lorder); i1 = healpix_lorder
          n_rayons_max = healpix_npix(i1)
+         i0 = i1 !tmp to check the filling of lambda_ij
       else
          lhealpix = .false.
          i0 = 0; i1 = imax_mc

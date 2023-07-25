@@ -111,6 +111,8 @@ module see
             !non-local elements (off-diagonal of the grand matrix Gamma.)
             allocate(atom%G_odiag(atom%Nlevel,atom%Nlevel,n_non_empty_cells,n_neighbours_max),stat=alloc_status)
             !built locally, frequency-angle integrated, for all neighbours of a cell.
+            !non-zero elements of the (Nlevel*n_cells,Nlevel*(N_neighbour + 1)) rate matrix
+            !allocate(atom%g_nnz(atom%Nlevel**2 * n_non_empty_cells * (1 + n_neighbours_max)))
             if (alloc_Status > 0) then
                 write(*,*) 8 * (n_non_empty_cells*(1+n_neighbours_max))*atom%Nlevel**2 / 1024.**3, 'GB'
                 call error("Allocation error atom%w")
@@ -197,6 +199,7 @@ module see
                     tab_Vij_cont(1:atom%continua(kr)%Nlambda,kr,n) = linear_1D_sorted(size(atom%continua(kr)%alpha_file),&
                          atom%continua(kr)%lambda_file,atom%continua(kr)%alpha_file,atom%continua(kr)%Nlambda,&
                          tab_lambda_nm(atom%continua(kr)%Nb:atom%continua(kr)%Nr))
+                    tab_Vij_cont(atom%continua(kr)%Nlambda,kr,n) = atom%continua(kr)%alpha_file(size(atom%continua(kr)%alpha_file))
                 endif
                 !loop for all cells here can be long
                 !could be para
@@ -481,7 +484,6 @@ module see
             write(23) n_cells
             write(23) Lambda_ij
             close(23)
-            stop
         endif
 
         allocate(b(at%Nlevel,n_non_empty_cells),ndag(at%Nlevel,n_cells))
@@ -497,9 +499,11 @@ module see
             imax = locate(at%n(:,tab_index_cell(i)),maxval(at%n(:,tab_index_cell(i))))
             b(imax,i) = at%Abund * nHtot(tab_index_cell(i))
             at%g_diag(imax,:,i) = 1.0_dp
-            at%g_odiag(:,:,i,:) = 0.0_dp !local mass conservation
+!check mass conserv
+            at%g_odiag(imax,:,i,:) = 0.0_dp !local mass conservation
         enddo
 
+write(*,*) "entering jacobi" 
         call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_diag,at%g_odiag,b,at%n,niter,dM)
         deallocate(b)
 
@@ -567,20 +571,21 @@ module see
 
             ! Calculate the new x values using the damped Jacobi method
 
-            do i=1,n !loop over non-empty cells representing the populations of that cell
-                icell = tab_index_cell(i)
+            non_empty_loop: do i=1,n !loop over non-empty cells representing the populations of that cell
+                icell = tab_index_cell(i) 
                 !can be computed before hand, it is constant here.
                 diag(:) = matdiag(D(:,:,i),nl)
 
                 x_new(:,i) = omega * (b(:,i) - matmul(D(:,:,i),x(:,icell)) + diag(:)*x(:,icell)) / diag(:) + &
                             (1.0_dp - omega) * x(:,icell)
 
-                do j=1,m!loop over neighbours of the cell i
+                neighb_loop : do j=1,m!loop over (potential) neighbours of the cell i
                     icell_n = tab_index_neighb(i,j) !neighbour cell icell_n (j) of cell icell (i)
+                    if (icell_n==0) cycle neighb_loop
                     x_new(:,i) = x_new(:,i) - omega * matmul(LU(:,:,i,j),x(:,icell_n)) / diag(:)
-                enddo
+                enddo neighb_loop
 
-            enddo
+            enddo non_empty_loop
 
 
             ! Calculate the error and check for convergence
@@ -605,11 +610,11 @@ module see
             ! x = x_new
             if (niter > nIterMax) exit
 
-            ! write(*, *) "Iteration ", niter, ": Error = ", diff
+            write(*, *) "Iteration ", niter, ": Error = ", diff
         end do
 
-        write(*, *) "Iteration ", niter, ": Error = ", diff
-
+        write(*, *) "(JACOBI) Iteration ", niter, ": Error = ", diff
+stop
         return
     end subroutine jacobi_sparse_nlocal_see
 
@@ -804,7 +809,7 @@ module see
         real(kind=dp) :: wphi, ni_on_nj_star, gij
         integer :: m, k
 
-TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not working properly if icell_n = 0
+! TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not working properly if icell_n = 0
 
         !ehnukt(:) = exp(hnu_k/T(icell)) --> defined only on tab_lambda_cont /= tab_lambda_nm !
 
@@ -818,18 +823,13 @@ TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not
             enddo
             !adding the neighbours' contribution
             if (alo_order > 0) Then
+                k = tab_index_i(icell)
                 do j=1, at%Nlevel
-                    Ieff(:) = Ieff(:) - sum( psi_odiag(:,:,id) * Ujdown_odiag(:,j,nact,:,id)*at%n(j,tab_index_neighb(k,m)),dim=2 )
+                    do m=1, n_neighbours_max
+                        if (tab_index_neighb(k,m)==0) cycle
+                        Ieff(:) = Ieff(:) - psi_odiag(:,m,id) * Ujdown_odiag(:,j,nact,m,id)*at%n(j,tab_index_neighb(k,m))
+                    enddo
                 enddo
-                ! k = tab_index_i(icell)
-                ! do m=1, n_neighbours_max
-                !     if (tab_index_neighb(k,m)==0) cycle
-                !     !to check
-                !     !eta_atoms = sum_j Uji * n_j, here over the neighbour cells.
-                !     do j=1, at%Nlevel
-                !         Ieff(:) = Ieff(:) - psi_odiag(:,m,id) * Ujdown_odiag(:,j,nact,m,id)*at%n(j,tab_index_neighb(k,m))
-                !     enddo
-                ! enddo
             endif
 
             line_loop : do kr=1, at%Nline
@@ -892,7 +892,7 @@ TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not
                         if (alo_order > 0) then
                             do m=1, n_neighbours_max
                                 if (tab_index_neighb(k,m)==0) cycle
-                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) + dOmega * &
+                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) - dOmega * &
                                     sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
                             enddo
                         endif
@@ -908,7 +908,7 @@ TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not
                         if (alo_order > 0) then
                             do m=1, n_neighbours_max
                                 if (tab_index_neighb(k,m)==0) cycle
-                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) + dOmega * &
+                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) - dOmega * &
                                     sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
                             enddo
                         endif
@@ -919,11 +919,13 @@ TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not
                 at%lines(kr)%Rij(id) = at%lines(kr)%Rij(id) + xcc_up * dOmega
 
                 !debug
-                if ((allocated(lambda_ij)).and.(kr==1)) then
+                if ((allocated(lambda_ij)).and.(kr==3)) then
                     lambda_ij(icell,icell) = lambda_ij(icell,icell) + dOmega * sum(psi(Nb:Nr,1,id))
                     do m=1, n_neighbours_max
                         if (tab_index_neighb(k,m)==0) cycle
-                        Lambda_ij(icell,tab_index_neighb(k,m)) = dOmega * sum(psi_odiag(Nb:Nr,m,id))
+                    !    write(*,*) "icell", icell, " k=", k
+                    !    write(*,*) "icell_n", tab_index_neighb(k,m)
+                        Lambda_ij(icell,tab_index_neighb(k,m)) = Lambda_ij(icell,tab_index_neighb(k,m)) + dOmega * sum(psi_odiag(Nb:Nr,m,id))
                     enddo
                 endif
 
@@ -986,7 +988,7 @@ TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not
                         if (alo_order > 0) then
                             do m=1, n_neighbours_max
                                 if (tab_index_neighb(k,m)==0) cycle
-                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) + dOmega * &
+                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) - dOmega * &
                                     sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
                             enddo
                         endif
@@ -1002,7 +1004,7 @@ TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not
                         if (alo_order > 0) then
                             do m=1, n_neighbours_max
                                 if (tab_index_neighb(k,m)==0) cycle
-                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) + dOmega * &
+                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) - dOmega * &
                                     sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
                             enddo
                         endif

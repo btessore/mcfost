@@ -204,6 +204,7 @@ module Opacity_atom
                atm%continua(kr)%alpha(:) = linear_1D_sorted(size(atm%continua(kr)%alpha_file),&
                     atm%continua(kr)%lambda_file,atm%continua(kr)%alpha_file,atm%continua(kr)%Nlambdac,&
                     tab_lambda_cont(atm%continua(kr)%Nbc:atm%continua(kr)%Nrc))
+               atm%continua(kr)%alpha(atm%continua(kr)%Nlambdac) = atm%continua(kr)%alpha_file(size(atm%continua(kr)%alpha_file))
                !to chheck the edge
             endif
 
@@ -464,6 +465,7 @@ module Opacity_atom
 
                   eta_atoms(Nblue:Nred,atom%activeindex,id) = eta_atoms(Nblue:Nred,nact,id) + Uji(1:Nlam) * atom%n(j,icell)
                else !potential neighbour, does not loop if alo_order = 0
+                    !If no neighbour, it simply add 0, initialised in xcoupling_cont.
                   ! write(*,*) cells_id(id), id
                   k = tab_index_i(cells_id(id))
                   nei_loop : do m=1, n_neighbours_max
@@ -494,6 +496,7 @@ module Opacity_atom
       real(kind=dp) :: gij, wl, ni_on_nj_star, twohnu3_c2, wt
       real(kind=dp) :: term1(Nlambda_max_cont), term2(Nlambda_max_cont), term3(Nlambda_max_cont)
       real(kind=dp) :: test (n_lambda)
+      logical :: lno_neighbour_found
 
       !if local point, icell == cells_id(id)
       llocal = (icell == cells_id(id))
@@ -505,15 +508,15 @@ module Opacity_atom
          eta_atoms(:,:,id) = 0.0_dp !future deprec ? eta = sum(Uji * n_j)
       else
          if (alo_order==0) return !no neighbour in that case !
-         !if the index is 0 because n_neighbour_cell < n_neighbour_max, we just add 0.0
-TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not working properly if icell_n = 0
-         psi_odiag(:,:,id) = 0.0_dp
+         lno_neighbour_found = .true.
+         !find index (>0) of the neighbour of the current cell in id_cells.
          do m=1, n_neighbours_max
             if (tab_index_neighb(tab_index_i(cells_id(id)),m)==icell) then
-               Ujdown_odiag(:,:,:,m,id) = 0.0_dp
+               lno_neighbour_found = .false.
                exit
             endif
          enddo
+         if (lno_neighbour_found) return
       endif
 
       at_loop : do nact=1, Nactiveatoms
@@ -618,7 +621,7 @@ TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not
 !    write(*,*) "t=",test
 !    write(*,*) "eta=", eta_atoms(:,1,id)
 !    write(*,*) "diff=", maxval(abs(eta_atoms(:,1,id)-test(:))/eta_atoms(:,1,id),mask=eta_atoms(:,1,id)>0)
-!    stop
+!   stop
     return
    end subroutine xcoupling_cont
 

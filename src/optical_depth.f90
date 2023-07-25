@@ -1194,8 +1194,7 @@ end subroutine optical_length_tot_mol
                elseif (nbr_cell<n_neighbours_max+1) then
                   boucle_voisin : do j=1,n_neighbours_max
                   !I can do better.
-TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not working properly if icell_n = 0
-
+                  !if no neighbour cell, psi is 0 anyway, initialised in contopac_atom_loc/xcoupling_cont.
                      if (tab_index_neighb(i,j)==icell) then
                         psi_odiag(:,j,id) = exp(-tau) / chi * (1.0_dp * exp(-dtau))
                         exit boucle_voisin
