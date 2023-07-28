@@ -32,6 +32,28 @@ module see
 
     contains
 
+    function innz(nl,i,l,j,lp)
+        ! For a matrix A of (nl*n,(1+m)*nl) with nl levels, n non empty cells and m neighbours
+        ! returns the index innz on a (nl**2 * n * (m+1)) vector of element A^{i,j}_{lp,l}
+        !    /                                                                                   \
+        !   | A^{i,j}_{lp,l} A^{i,j}_{lp+1,l} A^{i,j+1}_{lp,l} A^{i,j+1}_{lp+1,l}                 |
+        !   | A^{i,j}_{lp,l+1} A^{i,j}_{lp+1,l+1} A^{i,j+1}_{lp,l+1} A^{i,j+1}_{lp+1,l+1}         |
+        ! A | A^{i+1,j}_{lp,l} A^{i+1,j}_{lp+1,l} A^{i+1,j+1}_{lp,l} A^{i+1,j+1}_{lp+1,l}         |
+        !   | A^{i+1,j}_{lp,l+1} A^{i+1,j}_{lp+1,l+1} A^{i+1,j+1}_{lp,l+1} A^{i+1,j+1}_{lp+1,l+1} |
+        !   \                                                                                    /
+        !
+        integer :: innz
+        integer, intent(in) :: nl
+        integer, intent(in) :: l, i, j, lp
+        integer :: n, m
+
+        n = n_non_empty_cells
+        m = 1 + n_neighbours_max
+
+        innz = nl*n*m*(i-1) + m*nl*(l-1) + m*(j-1) + lp
+        return
+    end function innz
+
     subroutine alloc_nlte_var(n_rayons_max,mem)
     !allocate space for non-lte loop (only)
         integer, intent(in) :: n_rayons_max
@@ -106,18 +128,15 @@ module see
         Lambda_ij = 0.0; mem_alloc_non_local_alo = mem_alloc_non_local_alo  + sizeof(Lambda_ij)
         do n=1, NactiveAtoms
             atom => ActiveAtoms(n)%p
-            !diagonal elements of the rate matrix for each cells (like %gamma for each cell)
-            allocate(atom%G_diag(atom%Nlevel,atom%Nlevel,n_non_empty_cells)) !built after the local see (at%gamma) is built
-            !non-local elements (off-diagonal of the grand matrix Gamma.)
-            allocate(atom%G_odiag(atom%Nlevel,atom%Nlevel,n_non_empty_cells,n_neighbours_max),stat=alloc_status)
-            !built locally, frequency-angle integrated, for all neighbours of a cell.
+            !Built locally, frequency-angle integrated, for all neighbours of a cell.
             !non-zero elements of the (Nlevel*n_cells,Nlevel*(N_neighbour + 1)) rate matrix
-            !allocate(atom%g_nnz(atom%Nlevel**2 * n_non_empty_cells * (1 + n_neighbours_max)))
+            !NOTE: there are some 0 elements if the number of neighbour of a given cell is < n_neighbours_max.
+            allocate(atom%g_nnz(atom%Nlevel,atom%Nlevel, n_non_empty_cells, (1 + n_neighbours_max)))
             if (alloc_Status > 0) then
                 write(*,*) 8 * (n_non_empty_cells*(1+n_neighbours_max))*atom%Nlevel**2 / 1024.**3, 'GB'
                 call error("Allocation error atom%w")
             endif
-            mem_alloc_non_local_alo = mem_alloc_non_local_alo + sizeof(atom%G_odiag) + sizeof(atom%g_diag)
+            mem_alloc_non_local_alo = mem_alloc_non_local_alo + sizeof(atom%G_nnz)
         enddo
         atom => null()
         if (alo_order > 0) Then
@@ -159,6 +178,7 @@ module see
         allocate(eta_atoms(n_lambda,NactiveAtoms,nb_proc),stat=alloc_status)
         if (alloc_Status > 0) call error("Allocation error eta_atoms")
         write(*,*) " size eta_atoms:", sizeof(eta_atoms) / 1024./1024.," MB"
+        call warning("(SEE) eta_atoms used in local rate matrix future deprec (sum Uji * nj)")
         allocate(Uji_down(n_lambda,Nmaxlevel,NactiveAtoms,nb_proc),stat=alloc_status)
         if (alloc_Status > 0) call error("Allocation error Uji_down")
         write(*,*) " size cross-coupling:", 3 * sizeof(Uji_down) / 1024./1024./1024.," GB"
@@ -295,7 +315,7 @@ module see
 
         do n=1, NactiveAtoms
             atom => ActiveAtoms(n)%p
-            deallocate(atom%Gamma,atom%g_odiag,atom%g_diag)
+            deallocate(atom%Gamma,atom%g_nnz)
             do kr=1, atom%Nline
                 deallocate(atom%lines(kr)%Rij,atom%lines(kr)%Rji)
                 deallocate(atom%lines(kr)%Cij,atom%lines(kr)%Cji)
@@ -474,7 +494,7 @@ module see
     ! --------------------------------------------------------------------!
         type(AtomType), intent(inout) :: at
         real(kind=dp) :: dM
-        integer :: niter, i, imax
+        integer :: niter, i, imax, j, l
         real(kind=dp) :: local_sol(at%Nlevel)
         real(kind=dp), allocatable :: b(:,:), ndag(:,:)
 
@@ -489,7 +509,7 @@ module see
         allocate(b(at%Nlevel,n_non_empty_cells),ndag(at%Nlevel,n_cells))
         b(:,:) = 0.0
         ndag(:,:) = at%n !to replace because the convergence is computed after inversion
-        !using the new iterate computed locally with at%gamma (=at%g_diag)
+        !using the new iterate computed locally with at%gamma (diagonal of rate matrix or at%g_nnz(:,:,:,1)).
         !as a starting solution.
         at%n = ngpop(1:at%Nlevel,at%activeindex,:,1)
 
@@ -497,16 +517,21 @@ module see
         do i=1,n_non_empty_cells
             !we replace the equation for the level with the highest population at the previous iteration, for each cell. 
             imax = locate(at%n(:,tab_index_cell(i)),maxval(at%n(:,tab_index_cell(i))))
-            b(imax,i) = at%Abund * nHtot(tab_index_cell(i))
-            at%g_diag(imax,:,i) = 1.0_dp
-!check mass conserv
-            at%g_odiag(imax,:,i,:) = 0.0_dp !local mass conservation
+            b(imax,i) = 1.0_dp
+            at%n(:,tab_index_cell(i)) = at%n(:,tab_index_cell(i)) / (at%Abund * nHtot(tab_index_cell(i)))
+            at%g_nnz(imax,:,i,1) = 1.0_dp
+            ! do l = 1, at%Nlevel
+            !     at%g_nnz(l,l,i,2:n_neighbours_max+1) = 0.0_dp
+            !     at%g_nnz(l,l,i,2:n_neighbours_max+1) = sum(-at%g_nnz(:,l,i,2:n_neighbours_max+1),dim=1) !positive
+            ! end do
+            at%g_nnz(imax,:,i,2:n_neighbours_max+1) = 0.0
         enddo
 
-write(*,*) "entering jacobi" 
-        call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_diag,at%g_odiag,b,at%n,niter,dM)
+        call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_nnz,b,at%n,niter,dM)
         deallocate(b)
-
+        do l=1, at%Nlevel
+            at%n(l,:) = at%n(l,:) * at%Abund * nHtot
+        enddo
 
         ngpop(1:at%Nlevel,at%activeindex,:,1) = at%n(:,:)
         at%n(:,:) = ndag !to change that in the future with non-local inversion.
@@ -515,37 +540,23 @@ write(*,*) "entering jacobi"
         return
     end subroutine nlocal_SEE_atom
 
-    ! subroutine fill_diagonal_gamma(id,icell)
-    ! !fill the diagonal of the grand matrix gamma for each atom locally with the local
-    ! !MALI rate matrix
-    !     integer, intent(in) :: id, icell
-    !     type(AtomType), pointer :: at
-    !     integer :: nact
-
-    !     do nact=1, Nactiveatoms
-    !         at => activeatoms(nact)%p
-    !         !once all rates have been accumulated (frequency and angle integrated)
-    !         !it resets the rate matrix with given collisonal and radiative rates in case
-    !         !local inversion are done (n_iterate_ne > 0).
-    !         call rate_matrix_atom(id, at)
-    !         at%g_diag(:,:,tab_index_i(icell)) = at%gamma(:,:,id)
-    !         at => null()
-    !     enddo
-
-    !     return
-    ! end subroutine fill_diagonal_gamma
-
-    subroutine jacobi_sparse_nlocal_see(nl,n,m,D,LU,b,x,niter,diff)
+    subroutine jacobi_sparse_nlocal_see(nl,n,m,nnz,b,x,niter,diff)
     ! Note: In principle could go to utils.f90. However, this routine is so specific
     ! to how we solve the non-local multi-level populations, that it cannot be used
     ! for general Ax = b systems.
     !
     ! Solve a set of linear equations Ax = b with the Jacobi  method. Where A is
-    ! A = D + LU, with D the diagonal and LU the off-diagonal parts.
+    ! is a sparse matrix subset of B (nl*n, nl*n), of size (nl*n,nl*(m+1)) or (nl,nl,n,m+1).
     ! Here, x is the population vectors (nlevel,n_cells) and A, is a large sparse, 
-    ! block matrix (nlevel,nlevel,n_non_empty_cells,n_neighbours_max) that contain
+    ! block matrix (nlevel,nlevel,n_non_empty_cells,n_neighbours_max+1) that contain
     ! a set of SEE for each cell taking into account the coupling with the neighbours.
     ! matrix vector multiplication of the type Ax, are therefore fine tuned for that problem.
+    ! The diagonal is the concatenated diagonal of each SEE for each cell. that is:
+    ! do i=1,n
+    !     diag(1+(i-1)*nl:i*nl) = matdiag(nnz(:,:,i,1),nl)
+    ! enddo
+    !for a given cell, the diagonal is matdiag(nnz(:,:,i,1),nl). The off-diagonal elements (nnz(:,:,i,j>1))
+    !have matdiag(nnz(:,:,i,j>1),nl) = 0.0 by definition.
 
         real(kind=dp), parameter :: tol = 1d-9 ! Convergence tolerance
         !eventually, omega would be defined as a function of the eigen values of A
@@ -553,37 +564,170 @@ write(*,*) "entering jacobi"
         integer, parameter :: nIterMax = 500000
 
         integer, intent(in) :: nl, n, m
-        real(kind=dp), intent(in) :: D(nl, nl, n), LU(nl, nl, n, m), b(nl,n)
-        real(kind=dp), intent(inout) :: x(nl,*)
+        real(kind=dp), intent(in) :: nnz(nl,nl,n,m+1)
+        real(kind=dp), intent(inout) :: x(nl,*), b(nl,n)
         !to monitor convergence or not
         integer, intent(out) :: niter
         real(kind=dp), intent(out) :: diff
 
         logical :: lconverged
-        integer :: i, j, icell,icell_n, il, l
-        real(kind=dp) :: diag(nl), x_new(nl,n)
+        integer :: i, j, icell, icell_n, l, imax, imax_l
+        real(kind=dp) :: xtot(n), suma
+        real(kind=dp) :: diag(nl), x_new(nl,n), y(nl), ap(nl,nl)
+
 
         diff = 0
         niter = 0
         lconverged = .false.
+
+        do i=1, n
+            icell = tab_index_cell(i)
+            xtot(i) = sum(x(:,icell))
+        enddo
+        imax = locate(xtot,maxval(xtot))
+        !replace one equation with mass conservation of all cells ?? 
+
+        do while (.not. lconverged)
+            niter = niter + 1
+
+            ! Calculate the new x values using the damped Jacobi method
+
+            suma = 0
+            non_empty_loop: do i=1,n !loop over non-empty cells representing the populations of that cell
+                if (i==imax) cycle non_empty_loop
+                icell = tab_index_cell(i)
+
+                y(:) = 0.0_dp 
+                neighb_loop : do j=1,m!loop over (potential) neighbours of the cell i
+                    icell_n = tab_index_neighb(i,j) !neighbour cell icell_n (j) of cell icell (i)
+                    if (icell_n==0) cycle neighb_loop
+                    y(:) = y(:) - matmul(nnz(:,:,i,j+1),x(:,icell_n))
+                enddo neighb_loop
+
+                x_new(:,i) = omega * (b(:,i) + y(:))
+                ap(:,:) = nnz(:,:,i,1)
+                call gaussslv(ap, x_new(:,i), nl)
+                x_new(:,i) = x_new(:,i) + (1.0_dp - omega) * x(:,icell)
+                
+                write(*,*) "cell", i, icell
+                write(*,*) "x_old:", x(:,icell)
+                write(*,*) "x_new:", x_new(:,i)
+                write(*,*) "ntot=", sum(x_new(:,i))
+
+                suma = suma + sum(x(:,icell))
+            enddo non_empty_loop
+            icell = tab_index_cell(imax)
+            y(:) = 0.0_dp
+            do j=1,m!loop over (potential) neighbours of the cell i
+                icell_n = tab_index_neighb(imax,j) !neighbour cell icell_n (j) of cell icell (i)
+                if (icell_n==0) cycle
+                y(:) = y(:) - matmul(nnz(:,:,imax,j+1),x(:,icell_n))
+            enddo
+            !replace the equation of conservation of mass of levels at cell imax with a global
+            !mass conservation for all cells
+            imax_l = locate(b(:,imax),maxval(b(:,imax)))
+            b(imax_l,imax) = sum(xtot)
+            diag(imax_l) = 1.0_dp
+            y(imax_l) = y(imax_l) - suma
+            write(*,*) 'imax_l:', imax_l
+            write(*,*) 'b', b(:,imax)
+            write(*,*) 'y=',y
+
+            x_new(:,imax) = omega * (b(:,imax) + y(:))
+            ap(:,:) = nnz(:,:,imax,1)
+            call gaussslv(ap, x_new(:,imax), nl)
+            x_new(:,imax) = x_new(:,imax) + (1.0_dp - omega) * x(:,icell)
+
+            write(*,*) "cell", imax, icell
+            write(*,*) "x_old:", x(:,icell)
+            write(*,*) "x_new:", x_new(:,imax)
+            write(*,*) "ntot=", sum(x_new(:,imax)), " nglob=", suma + x_new(imax_l,imax), sum(xtot)
+
+            ! Calculate the error and check for convergence
+            ! diff = maxval(abs(x_new - x)/x,mask=x>0)
+            diff = 0.0
+            do i=1,n
+                diff = max( diff, maxval( abs( 1.0_dp - x(:,tab_index_cell(i)) / x_new(:,i) ) ) )
+            enddo
+            lconverged = (diff < tol)
+
+            ! Update x for the next iteration
+            do i=1,n
+                x(:,tab_index_cell(i)) = x_new(:,i)
+            enddo
+            ! x = x_new
+            if (niter > nIterMax) exit
+
+            write(*, *) "Iteration ", niter, ": Error = ", diff
+read(*,*)
+        end do
+
+        write(*, *) "(JACOBI) Iteration ", niter, ": Error = ", diff
+stop
+        return
+    end subroutine jacobi_sparse_nlocal_see
+
+
+    subroutine jacobi_sparse_nlocal_see_back(nl,n,m,nnz,b,x,niter,diff)
+    ! Note: In principle could go to utils.f90. However, this routine is so specific
+    ! to how we solve the non-local multi-level populations, that it cannot be used
+    ! for general Ax = b systems.
+    !
+    ! Solve a set of linear equations Ax = b with the Jacobi  method. Where A is
+    ! is a sparse matrix subset of B (nl*n, nl*n), of size (nl*n,nl*(m+1)) or (nl,nl,n,m+1).
+    ! Here, x is the population vectors (nlevel,n_cells) and A, is a large sparse, 
+    ! block matrix (nlevel,nlevel,n_non_empty_cells,n_neighbours_max+1) that contain
+    ! a set of SEE for each cell taking into account the coupling with the neighbours.
+    ! matrix vector multiplication of the type Ax, are therefore fine tuned for that problem.
+    ! The diagonal is the concatenated diagonal of each SEE for each cell. that is:
+    ! do i=1,n
+    !     diag(1+(i-1)*nl:i*nl) = matdiag(nnz(:,:,i,1),nl)
+    ! enddo
+    !for a given cell, the diagonal is matdiag(nnz(:,:,i,1),nl). The off-diagonal elements (nnz(:,:,i,j>1))
+    !have matdiag(nnz(:,:,i,j>1),nl) = 0.0 by definition.
+
+        real(kind=dp), parameter :: tol = 1d-9 ! Convergence tolerance
+        !eventually, omega would be defined as a function of the eigen values of A
+        real(kind=dp), parameter :: omega = 1.0 ! Damping factor (0 < omega < 1)
+        integer, parameter :: nIterMax = 500000
+
+        integer, intent(in) :: nl, n, m
+        real(kind=dp), intent(in) :: nnz(nl,nl,n,m+1)
+        real(kind=dp), intent(inout) :: x(nl,*), b(nl,n)
+        !to monitor convergence or not
+        integer, intent(out) :: niter
+        real(kind=dp), intent(out) :: diff
+
+        logical :: lconverged
+        integer :: i, j, icell, icell_n, l, imax
+        real(kind=dp) :: diag(nl), x_new(nl,n), y(nl)
+
+
+        diff = 0
+        niter = 0
+        lconverged = .false.
+
         do while (.not. lconverged)
             niter = niter + 1
 
             ! Calculate the new x values using the damped Jacobi method
 
             non_empty_loop: do i=1,n !loop over non-empty cells representing the populations of that cell
-                icell = tab_index_cell(i) 
-                !can be computed before hand, it is constant here.
-                diag(:) = matdiag(D(:,:,i),nl)
+                if (i==imax) cycle non_empty_loop
+                icell = tab_index_cell(i)
 
-                x_new(:,i) = omega * (b(:,i) - matmul(D(:,:,i),x(:,icell)) + diag(:)*x(:,icell)) / diag(:) + &
-                            (1.0_dp - omega) * x(:,icell)
+                !can be computed before hand, it is constant here.
+                diag(:) = matdiag(nnz(:,:,i,1),nl)
+
+                y(:) = diag(:) * x(:,icell) - matmul(nnz(:,:,i,1),x(:,icell))
 
                 neighb_loop : do j=1,m!loop over (potential) neighbours of the cell i
                     icell_n = tab_index_neighb(i,j) !neighbour cell icell_n (j) of cell icell (i)
                     if (icell_n==0) cycle neighb_loop
-                    x_new(:,i) = x_new(:,i) - omega * matmul(LU(:,:,i,j),x(:,icell_n)) / diag(:)
+                    y(:) = y(:) - matmul(nnz(:,:,i,j+1),x(:,icell_n))
                 enddo neighb_loop
+
+                x_new(:,i) = omega * (b(:,i) + y(:)) / diag(:) + (1.0_dp - omega) * x(:,icell)
 
             enddo non_empty_loop
 
@@ -593,13 +737,13 @@ write(*,*) "entering jacobi"
             diff = 0.0
             do i=1,n
                 diff = max( diff, maxval( abs( 1.0_dp - x(:,tab_index_cell(i)) / x_new(:,i) ) ) )
-                ! do l=1, nl
-                !     if (x_new(l,i) < frac_limit_pops * maxval(abs(x(:,tab_index_cell(i))))) then
-                !         x_new(l,i) = abs(x_new(l,i))
-                !     else
-                !         diff = max( diff, abs( 1.0_dp - x(l,tab_index_cell(i)) / x_new(l,i) ) )
-                !     endif
-                ! enddo
+            !     do l=1, nl
+            !         if (x_new(l,i) < frac_limit_pops * maxval(b(:,i))) then
+            !             x_new(l,i) = abs(x_new(l,i))
+            !         else
+            !             diff = max( diff, abs( 1.0_dp - x(l,tab_index_cell(i)) / x_new(l,i) ) )
+            !         endif
+            !     enddo
             enddo
             lconverged = (diff < tol)
 
@@ -616,7 +760,7 @@ write(*,*) "entering jacobi"
         write(*, *) "(JACOBI) Iteration ", niter, ": Error = ", diff
 stop
         return
-    end subroutine jacobi_sparse_nlocal_see
+    end subroutine jacobi_sparse_nlocal_see_back
 
     subroutine update_populations_nonlocal(iterate_ne)
     ! --------------------------------------------------------------------!
@@ -692,17 +836,21 @@ stop
 
         enddo
 
-
         do l = 1, atom%Nlevel
             atom%Gamma(l,l,id) = 0.0_dp
             !Gamma(j,i) = -(Rij + Cij); Gamma(i,j) = -(Rji + Cji)
             !Gamma(i,i) = Rij + Cij = -sum(Gamma(j,i))
             atom%Gamma(l,l,id) = sum(-atom%Gamma(:,l,id)) !positive
         end do
-        
-        !fill the diagonal of the grand matrix gamma locally with the local SEE matrix.
-        !index of the non-LTE local cell is in cells_id.
-        atom%g_diag(:,:,tab_index_i(cells_id(id))) = atom%gamma(:,:,id)
+
+        !fill the diagonal of the non-zero version of the rate matrix
+        atom%g_nnz(:,:,tab_index_i(cells_id(id)),1) = atom%Gamma(:,:,id)
+        !j = 1 for the local point right ?
+        ! do j=1, atom%Nlevel
+        !     do i=1, atom%Nlevel
+        !         atom%g_nnz(innz(atom%Nlevel,tab_index_i(cells_id(id)),j,1,i))
+        !     enddo
+        ! enddo
 
 ! stop
         return
@@ -713,8 +861,8 @@ stop
         integer :: n
 
         if (alo_order > 0) then
-            psi_odiag = 0.0_dp
-            Ujdown_odiag = 0.0_dp
+            psi_odiag(:,:,id) = 0.0_dp
+            Ujdown_odiag(:,:,:,:,id) = 0.0_dp
         endif
 
         do n=1,NactiveAtoms
@@ -722,14 +870,16 @@ stop
 
             !x ne included. Derivatives to ne not included.
             if (activeatoms(n)%p%id=='H') then
+            !-> error if missing transitions, the rate are not added
                 ! call init_colrates_atom(id,ActiveAtoms(n)%p)
                 call collision_rates_hydrogen_loc(id,icell)
             else
                 call init_colrates_atom(id,ActiveAtoms(n)%p)
+            !-> error if missing transitions, the rate are not added
                 call collision_rates_atom_loc(id,icell,ActiveAtoms(n)%p)
             endif
 
-            activeatoms(n)%p%g_odiag(:,:,tab_index_i(icell),:) = 0.0_dp
+            activeatoms(n)%p%g_nnz(:,:,tab_index_i(cells_id(id)),:) = 0.0_dp
         enddo
 
         return
@@ -809,9 +959,12 @@ stop
         real(kind=dp) :: wphi, ni_on_nj_star, gij
         integer :: m, k
 
-! TO DO: check the sum with at%g_odiag(j,i,k,m) as the access of neighbours is not working properly if icell_n = 0
+! TO DO: check the sum with at%g_nnz(j,i,k,m+1) as the access of neighbours is not working properly if icell_n = 0
 
         !ehnukt(:) = exp(hnu_k/T(icell)) --> defined only on tab_lambda_cont /= tab_lambda_nm !
+
+        k = tab_index_i(icell)
+        if (minval(Itot(:,iray,id)) < 0.0_dp) call error("(accumulate_radrates) Itot < 0!")
 
         atom_loop : do nact = 1, Nactiveatoms
             at => ActiveAtoms(nact)%p
@@ -819,15 +972,14 @@ stop
             !Ieff = (Psi - Psi^\ast) eta
             Ieff(:) = Itot(:,iray,id)! - Psi(:,1,id) * eta_atoms(:,nact,id)
             do j=1, at%Nlevel
-                Ieff(:) = Ieff(:) - psi(:,1,id) * Uji_down(:,j,nact,id) * at%n(j,icell)
+                Ieff(:) = max(Ieff(:) - psi(:,1,id) * Uji_down(:,j,nact,id) * at%n(j,icell), 0.0_dp)
             enddo
             !adding the neighbours' contribution
             if (alo_order > 0) Then
-                k = tab_index_i(icell)
-                do j=1, at%Nlevel
-                    do m=1, n_neighbours_max
-                        if (tab_index_neighb(k,m)==0) cycle
-                        Ieff(:) = Ieff(:) - psi_odiag(:,m,id) * Ujdown_odiag(:,j,nact,m,id)*at%n(j,tab_index_neighb(k,m))
+                do m=1, n_neighbours_max
+                    if (tab_index_neighb(k,m)==0) cycle
+                    do j=1, at%Nlevel
+                        Ieff(:) = max(Ieff(:) - psi_odiag(:,m,id) * Ujdown_odiag(:,j,nact,m,id)*at%n(j,tab_index_neighb(k,m)),0.0_dp)
                     enddo
                 enddo
             endif
@@ -875,7 +1027,7 @@ stop
                     do m=1, n_neighbours_max
                         if (tab_index_neighb(k,m)==0) cycle
                         ! + because G(i,j) = -R_ji but Rji = Aji - xcc_down
-                        at%g_odiag(i,j,k,m) = at%g_odiag(i,j,k,m) + dOmega * &
+                        at%g_nnz(i,j,k,m+1) = at%g_nnz(i,j,k,m+1) + dOmega * &
                             sum(chi_up(Nb:Nr,i,nact,id)*psi_odiag(Nb:Nr,m,id)*Ujdown_odiag(Nb:Nr,j,nact,m,id))
                     enddo
                 endif
@@ -890,9 +1042,10 @@ stop
                     if (jp==i) then !i upper level of another transitions
                         xcc_up = xcc_up + sum(chi_down(Nbp:Nrp,j,nact,id)*psi(Nbp:Nrp,1,id)*Uji_down(Nbp:Nrp,i,nact,id))
                         if (alo_order > 0) then
+                            !Gji = - Rij = -( Rij + xcc_up * dOmega )
                             do m=1, n_neighbours_max
                                 if (tab_index_neighb(k,m)==0) cycle
-                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) - dOmega * &
+                                at%g_nnz(j,i,k,m+1) = at%g_nnz(j,i,k,m+1) - dOmega * &
                                     sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
                             enddo
                         endif
@@ -908,7 +1061,7 @@ stop
                         if (alo_order > 0) then
                             do m=1, n_neighbours_max
                                 if (tab_index_neighb(k,m)==0) cycle
-                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) - dOmega * &
+                                at%g_nnz(j,i,k,m+1) = at%g_nnz(j,i,k,m+1) - dOmega * &
                                     sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
                             enddo
                         endif
@@ -971,8 +1124,8 @@ stop
                     do m=1, n_neighbours_max
                         if (tab_index_neighb(k,m)==0) cycle
                         ! + because G(i,j) = -R_ji but Rji = Aji - xcc_down
-                        at%g_odiag(i,j,k,m) = at%g_odiag(i,j,k,m) + dOmega * &
-                            sum(chi_up(Nb:Nr,i,nact,id)*psi_odiag(Nb:Nr,m,id)*Ujdown_odiag(Nb:Nr,j,nact,m,id))
+                        at%g_nnz(i,j,k,m+1) = at%g_nnz(i,j,k,m+1) + &
+                            dOmega * sum(chi_up(Nb:Nr,i,nact,id)*psi_odiag(Nb:Nr,m,id)*Ujdown_odiag(Nb:Nr,j,nact,m,id))
                     enddo
                 endif
 
@@ -988,7 +1141,7 @@ stop
                         if (alo_order > 0) then
                             do m=1, n_neighbours_max
                                 if (tab_index_neighb(k,m)==0) cycle
-                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) - dOmega * &
+                                at%g_nnz(j,i,k,m+1) = at%g_nnz(j,i,k,m+1) - dOmega * &
                                     sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
                             enddo
                         endif
@@ -1004,7 +1157,7 @@ stop
                         if (alo_order > 0) then
                             do m=1, n_neighbours_max
                                 if (tab_index_neighb(k,m)==0) cycle
-                                at%g_odiag(j,i,k,m) = at%g_odiag(j,i,k,m) - dOmega * &
+                                at%g_nnz(j,i,k,m+1) = at%g_nnz(j,i,k,m+1) - dOmega * &
                                     sum(chi_down(Nbp:Nrp,j,nact,id)*psi_odiag(Nbp:Nrp,m,id)*Ujdown_odiag(Nbp:Nrp,i,nact,m,id))
                             enddo
                         endif
@@ -1045,6 +1198,7 @@ stop
         real(kind=dp) :: wl, wphi, anu, anu1, ni_on_nj_star, gij
         real(kind=dp) :: ehnukt, ehnukt1
 ! write(*,*) icell, T(icell)
+!TO DO: check Itot >= 0 and ensure Ieff >= 0
         atom_loop : do nact = 1, Nactiveatoms
             atom => ActiveAtoms(nact)%p
 

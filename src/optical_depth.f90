@@ -1191,12 +1191,12 @@ end subroutine optical_length_tot_mol
                   !local, unaffected by vel.
                   psi(:,1,id) = ( 1.0_dp - exp( -dtau(:) ) ) / chi
                   ds(iray,id) = l_contrib * AU_to_m
-               elseif (nbr_cell<n_neighbours_max+1) then
+               elseif (nbr_cell<n_neighbours_max+1) then !n_neighbours_max is geomtry dependent, not n_cells dependent.
                   boucle_voisin : do j=1,n_neighbours_max
                   !I can do better.
                   !if no neighbour cell, psi is 0 anyway, initialised in contopac_atom_loc/xcoupling_cont.
                      if (tab_index_neighb(i,j)==icell) then
-                        psi_odiag(:,j,id) = exp(-tau) / chi * (1.0_dp * exp(-dtau))
+                        psi_odiag(:,j,id) = exp(-tau) * (1.0_dp - exp(-dtau)) / chi
                         exit boucle_voisin
                      endif
                   enddo boucle_voisin
