@@ -479,7 +479,7 @@ module see
         return
     end subroutine see_atom
 
-    subroutine nlocal_SEE_atom(at)
+    subroutine nlocal_SEE_atom_back(at)
     ! --------------------------------------------------------------------!
     ! For atom at solves for the Statistical Equilibrium Equations (SEE)
     !
@@ -527,8 +527,60 @@ module see
             at%g_nnz(imax,:,i,2:n_neighbours_max+1) = 0.0
         enddo
 
-        call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_nnz,b,at%n,niter,dM)
+        call jacobi_sparse_nlocal_see_back(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_nnz,b,at%n,niter,dM)
         deallocate(b)
+        do l=1, at%Nlevel
+            at%n(l,:) = at%n(l,:) * at%Abund * nHtot
+        enddo
+
+        ngpop(1:at%Nlevel,at%activeindex,:,1) = at%n(:,:)
+        at%n(:,:) = ndag !to change that in the future with non-local inversion.
+        deallocate(ndag)
+
+        return
+    end subroutine nlocal_SEE_atom_back
+
+    subroutine nlocal_SEE_atom(at)
+    ! --------------------------------------------------------------------!
+    ! For atom at solves for the Statistical Equilibrium Equations (SEE)
+    !
+    !
+    ! For numerical stability, the row with the largest populations is
+    ! eliminated (i.e., it is replaced by the mass conservation law).
+    !
+    ! see Hubeny & Mihalas Stellar atmospheres, p. 448-450
+    !	eqs 14.6 to 14.8c
+    !
+    !
+    ! --------------------------------------------------------------------!
+        type(AtomType), intent(inout) :: at
+        real(kind=dp) :: dM
+        integer :: niter, i, imax, j, l
+        real(kind=dp) :: local_sol(at%Nlevel)
+        real(kind=dp), allocatable :: ndag(:,:)
+
+        !debug
+        if (allocated(lambda_ij)) then
+            open(unit=23,file='lambda_ij.b',form='unformatted',access='stream',status='unknown')
+            write(23) n_cells
+            write(23) Lambda_ij
+            close(23)
+        endif
+
+        allocate(ndag(at%Nlevel,n_cells))
+        ndag(:,:) = at%n !to replace because the convergence is computed after inversion
+        !using the new iterate computed locally with at%gamma (diagonal of rate matrix or at%g_nnz(:,:,:,1)).
+        !as a starting solution.
+        at%n = ngpop(1:at%Nlevel,at%activeindex,:,1)
+
+        !normalisation such that the mass conservation of each cell is 1.
+        do l=1, at%Nlevel
+            at%n(l,:) = at%n(l,:) / (at%Abund * nHtot(:))
+        enddo
+
+        call jacobi_sparse_nlocal_see(at%Nlevel,n_non_empty_cells,n_neighbours_max,at%g_nnz,at%n,niter,dM)
+
+        !de normalisation
         do l=1, at%Nlevel
             at%n(l,:) = at%n(l,:) * at%Abund * nHtot
         enddo
@@ -540,7 +592,7 @@ module see
         return
     end subroutine nlocal_SEE_atom
 
-    subroutine jacobi_sparse_nlocal_see(nl,n,m,nnz,b,x,niter,diff)
+    subroutine jacobi_sparse_nlocal_see(nl,n,m,nz,x,niter,diff)
     ! Note: In principle could go to utils.f90. However, this routine is so specific
     ! to how we solve the non-local multi-level populations, that it cannot be used
     ! for general Ax = b systems.
@@ -552,11 +604,8 @@ module see
     ! a set of SEE for each cell taking into account the coupling with the neighbours.
     ! matrix vector multiplication of the type Ax, are therefore fine tuned for that problem.
     ! The diagonal is the concatenated diagonal of each SEE for each cell. that is:
-    ! do i=1,n
-    !     diag(1+(i-1)*nl:i*nl) = matdiag(nnz(:,:,i,1),nl)
-    ! enddo
-    !for a given cell, the diagonal is matdiag(nnz(:,:,i,1),nl). The off-diagonal elements (nnz(:,:,i,j>1))
-    !have matdiag(nnz(:,:,i,j>1),nl) = 0.0 by definition.
+    ! For a given cell, the diagonal is matdiag(nz(:,:,i,1),nl). The off-diagonal elements (nz(:,:,i,j>1))
+    ! have matdiag(nz(:,:,i,j>1),nl) = 0.0 by definition.
 
         real(kind=dp), parameter :: tol = 1d-9 ! Convergence tolerance
         !eventually, omega would be defined as a function of the eigen values of A
@@ -564,84 +613,66 @@ module see
         integer, parameter :: nIterMax = 500000
 
         integer, intent(in) :: nl, n, m
-        real(kind=dp), intent(in) :: nnz(nl,nl,n,m+1)
-        real(kind=dp), intent(inout) :: x(nl,*), b(nl,n)
+        real(kind=dp), intent(in) :: nz(nl,nl,n,m+1)
+        real(kind=dp), intent(inout) :: x(nl,*)
         !to monitor convergence or not
         integer, intent(out) :: niter
         real(kind=dp), intent(out) :: diff
 
         logical :: lconverged
-        integer :: i, j, icell, icell_n, l, imax, imax_l
-        real(kind=dp) :: xtot(n), suma
-        real(kind=dp) :: diag(nl), x_new(nl,n), y(nl), ap(nl,nl)
+        integer :: i, j, icell, icell_n, l, imax
+        real(kind=dp) ::  x_new(nl,n), y(nl), diag_nz(nl,nl)! to do allocatable
+        real(kind=dp) :: anz(nl,nl,m+1), b(nl)! to do allocatable
 
 
         diff = 0
         niter = 0
         lconverged = .false.
 
-        do i=1, n
-            icell = tab_index_cell(i)
-            xtot(i) = sum(x(:,icell))
-        enddo
-        imax = locate(xtot,maxval(xtot))
-        !replace one equation with mass conservation of all cells ?? 
-
         do while (.not. lconverged)
             niter = niter + 1
-
+            ! --------------------------------------------------------------------------------------------------- !
             ! Calculate the new x values using the damped Jacobi method
 
-            suma = 0
             non_empty_loop: do i=1,n !loop over non-empty cells representing the populations of that cell
-                if (i==imax) cycle non_empty_loop
                 icell = tab_index_cell(i)
+
+                !copy the rate matrix for this cell
+                anz(:,:,:) = nz(:,:,i,:)
+                b(:) = 0.0_dp
+
+                ! ------ mass conservation ------ !
+                imax = locate(x(:,icell),maxval(abs(x(:,icell))))
+                b(imax) = 1.0_dp
+
+                anz(imax,:,1) = 1.0_dp
+                anz(imax,:,2:m+1) = 0.0_dp
+                ! -------------------------------- !
 
                 y(:) = 0.0_dp 
                 neighb_loop : do j=1,m!loop over (potential) neighbours of the cell i
                     icell_n = tab_index_neighb(i,j) !neighbour cell icell_n (j) of cell icell (i)
                     if (icell_n==0) cycle neighb_loop
-                    y(:) = y(:) - matmul(nnz(:,:,i,j+1),x(:,icell_n))
+                    y(:) = y(:) - matmul(anz(:,:,j+1),x(:,icell_n))
                 enddo neighb_loop
 
-                x_new(:,i) = omega * (b(:,i) + y(:))
-                ap(:,:) = nnz(:,:,i,1)
-                call gaussslv(ap, x_new(:,i), nl)
+                x_new(:,i) = omega * (b(:) + y(:))
+                !diagonal of the block matrix for this cell
+                diag_nz(:,:) = anz(:,:,1)
+                call gaussslv(diag_nz, x_new(:,i), nl)
                 x_new(:,i) = x_new(:,i) + (1.0_dp - omega) * x(:,icell)
                 
                 write(*,*) "cell", i, icell
+                write(*,*) 'y=',y
                 write(*,*) "x_old:", x(:,icell)
                 write(*,*) "x_new:", x_new(:,i)
                 write(*,*) "ntot=", sum(x_new(:,i))
 
-                suma = suma + sum(x(:,icell))
             enddo non_empty_loop
-            icell = tab_index_cell(imax)
-            y(:) = 0.0_dp
-            do j=1,m!loop over (potential) neighbours of the cell i
-                icell_n = tab_index_neighb(imax,j) !neighbour cell icell_n (j) of cell icell (i)
-                if (icell_n==0) cycle
-                y(:) = y(:) - matmul(nnz(:,:,imax,j+1),x(:,icell_n))
-            enddo
-            !replace the equation of conservation of mass of levels at cell imax with a global
-            !mass conservation for all cells
-            imax_l = locate(b(:,imax),maxval(b(:,imax)))
-            b(imax_l,imax) = sum(xtot)
-            diag(imax_l) = 1.0_dp
-            y(imax_l) = y(imax_l) - suma
-            write(*,*) 'imax_l:', imax_l
-            write(*,*) 'b', b(:,imax)
-            write(*,*) 'y=',y
 
-            x_new(:,imax) = omega * (b(:,imax) + y(:))
-            ap(:,:) = nnz(:,:,imax,1)
-            call gaussslv(ap, x_new(:,imax), nl)
-            x_new(:,imax) = x_new(:,imax) + (1.0_dp - omega) * x(:,icell)
-
-            write(*,*) "cell", imax, icell
-            write(*,*) "x_old:", x(:,icell)
-            write(*,*) "x_new:", x_new(:,imax)
-            write(*,*) "ntot=", sum(x_new(:,imax)), " nglob=", suma + x_new(imax_l,imax), sum(xtot)
+            write(*,*) "max(x_new):", maxval(x_new)
+            write(*,*) "min(x_new):", minval(x_new)
+            ! --------------------------------------------------------------------------------------------------- !
 
             ! Calculate the error and check for convergence
             ! diff = maxval(abs(x_new - x)/x,mask=x>0)
@@ -663,9 +694,146 @@ read(*,*)
         end do
 
         write(*, *) "(JACOBI) Iteration ", niter, ": Error = ", diff
-stop
+read(*,*)
         return
     end subroutine jacobi_sparse_nlocal_see
+
+!     subroutine jacobi_sparse_nlocal_see(nl,n,m,nnz,b,x,niter,diff)
+!     ! Note: In principle could go to utils.f90. However, this routine is so specific
+!     ! to how we solve the non-local multi-level populations, that it cannot be used
+!     ! for general Ax = b systems.
+!     !
+!     ! Solve a set of linear equations Ax = b with the Jacobi  method. Where A is
+!     ! is a sparse matrix subset of B (nl*n, nl*n), of size (nl*n,nl*(m+1)) or (nl,nl,n,m+1).
+!     ! Here, x is the population vectors (nlevel,n_cells) and A, is a large sparse, 
+!     ! block matrix (nlevel,nlevel,n_non_empty_cells,n_neighbours_max+1) that contain
+!     ! a set of SEE for each cell taking into account the coupling with the neighbours.
+!     ! matrix vector multiplication of the type Ax, are therefore fine tuned for that problem.
+!     ! The diagonal is the concatenated diagonal of each SEE for each cell. that is:
+!     ! For a given cell, the diagonal is matdiag(nnz(:,:,i,1),nl). The off-diagonal elements (nnz(:,:,i,j>1))
+!     ! have matdiag(nnz(:,:,i,j>1),nl) = 0.0 by definition.
+
+!         real(kind=dp), parameter :: tol = 1d-9 ! Convergence tolerance
+!         !eventually, omega would be defined as a function of the eigen values of A
+!         real(kind=dp), parameter :: omega = 1.0 ! Damping factor (0 < omega < 1)
+!         integer, parameter :: nIterMax = 500000
+
+!         integer, intent(in) :: nl, n, m
+!         real(kind=dp), intent(in) :: nnz(nl,nl,n,m+1)
+!         real(kind=dp), intent(inout) :: x(nl,*), b(nl,n)
+!         !to monitor convergence or not
+!         integer, intent(out) :: niter
+!         real(kind=dp), intent(out) :: diff
+
+!         logical :: lconverged
+!         integer :: i, j, icell, icell_n, l, imax, imax_l
+!         real(kind=dp) :: xtot(n)!, suma
+!         real(kind=dp) ::  x_new(nl,n), y(nl), ap(nl,nl)!, diag(nl)
+
+
+!         diff = 0
+!         niter = 0
+!         lconverged = .false.
+
+! !replace one equation with mass conservation of all cells ?? 
+!         !total number of particles on the grid (sum over all levels and cells).
+!         do i=1, n
+!             icell = tab_index_cell(i)
+!             xtot(i) = sum(x(:,icell))
+!         enddo
+!         imax = locate(xtot,maxval(xtot))
+
+!         do while (.not. lconverged)
+!             niter = niter + 1
+!             ! --------------------------------------------------------------------------------------------------- !
+!             ! Calculate the new x values using the damped Jacobi method
+
+!             ! suma = 0
+!             non_empty_loop: do i=1,n !loop over non-empty cells representing the populations of that cell
+!                 if (i==imax) cycle non_empty_loop
+!                 icell = tab_index_cell(i)
+
+!                 y(:) = 0.0_dp 
+!                 neighb_loop : do j=1,m!loop over (potential) neighbours of the cell i
+!                     icell_n = tab_index_neighb(i,j) !neighbour cell icell_n (j) of cell icell (i)
+!                     if (icell_n==0) cycle neighb_loop
+!                     y(:) = y(:) - matmul(nnz(:,:,i,j+1),x(:,icell_n))
+!                 enddo neighb_loop
+
+!                 x_new(:,i) = omega * (b(:,i) + y(:))
+!                 !diagonal of the block
+!                 ap(:,:) = nnz(:,:,i,1)
+!                 call gaussslv(ap, x_new(:,i), nl)
+!                 x_new(:,i) = x_new(:,i) + (1.0_dp - omega) * x(:,icell)
+                
+!                 write(*,*) "cell", i, icell
+!                 write(*,*) 'b', b(:,imax)
+!                 write(*,*) 'y=',y
+!                 write(*,*) "x_old:", x(:,icell)
+!                 write(*,*) "x_new:", x_new(:,i)
+!                 write(*,*) "ntot=", sum(x_new(:,i))
+
+!                 ! suma = suma + sum(x(:,icell))
+!             enddo non_empty_loop
+!             icell = tab_index_cell(imax)
+!             y(:) = 0.0_dp
+!             do j=1,m!loop over (potential) neighbours of the cell i
+!                 icell_n = tab_index_neighb(imax,j) !neighbour cell icell_n (j) of cell icell (i)
+!                 if (icell_n==0) cycle
+!                 y(:) = y(:) - matmul(nnz(:,:,imax,j+1),x(:,icell_n))
+!             enddo
+! !replace the equation of conservation of mass of levels at cell imax with a global ???
+!             !mass conservation for all cells to link the neighbours.
+!             imax_l = locate(b(:,imax),maxval(b(:,imax)))
+!             write(*,*) "nnz(imax_l):", nnz(imax_l,:,imax,:)
+!             b(imax_l,imax) = sum(xtot)
+!             y(imax_l) = y(imax_l) - real(n-1) !due to the normalisation on x(:,icell), the sum is simply n-1 here.
+!                                               !because we sum all populations of all cells except for cell imax, each
+!                                               !contributing 1.
+!                                               !The equation of level imax_l of cell imax, including the levels l /= imax_l of imax
+!                                               !are in y and nnz(imax_l,:,imax,:)
+!             ! write(*,*) 'imax_l:', imax_l
+!             ! write(*,*) 'b', b(:,imax)
+!             ! write(*,*) 'y=',y
+
+!             x_new(:,imax) = omega * (b(:,imax) + y(:))
+!             !diagonal of the block
+!             ap(:,:) = nnz(:,:,imax,1)
+!             call gaussslv(ap, x_new(:,imax), nl)
+!             x_new(:,imax) = x_new(:,imax) + (1.0_dp - omega) * x(:,icell)
+
+!             write(*,*) "cell", imax, icell
+!             write(*,*) "x_old:", x(:,icell)
+!             write(*,*) "x_new:", x_new(:,imax)                  !suma
+!             write(*,*) "ntot=", sum(x_new(:,imax)), " nglob=", real(n-1) + sum(x_new(:,imax)), sum(xtot), sum(x_new)
+
+!             write(*,*) "max(x_new):", maxval(x_new)
+!             write(*,*) "min(x_new):", minval(x_new)
+!             ! --------------------------------------------------------------------------------------------------- !
+
+!             ! Calculate the error and check for convergence
+!             ! diff = maxval(abs(x_new - x)/x,mask=x>0)
+!             diff = 0.0
+!             do i=1,n
+!                 diff = max( diff, maxval( abs( 1.0_dp - x(:,tab_index_cell(i)) / x_new(:,i) ) ) )
+!             enddo
+!             lconverged = (diff < tol)
+
+!             ! Update x for the next iteration
+!             do i=1,n
+!                 x(:,tab_index_cell(i)) = x_new(:,i)
+!             enddo
+!             ! x = x_new
+!             if (niter > nIterMax) exit
+
+!             write(*, *) "Iteration ", niter, ": Error = ", diff
+! read(*,*)
+!         end do
+
+!         write(*, *) "(JACOBI) Iteration ", niter, ": Error = ", diff
+! read(*,*)
+!         return
+!     end subroutine jacobi_sparse_nlocal_see
 
 
     subroutine jacobi_sparse_nlocal_see_back(nl,n,m,nnz,b,x,niter,diff)
@@ -713,7 +881,6 @@ stop
             ! Calculate the new x values using the damped Jacobi method
 
             non_empty_loop: do i=1,n !loop over non-empty cells representing the populations of that cell
-                if (i==imax) cycle non_empty_loop
                 icell = tab_index_cell(i)
 
                 !can be computed before hand, it is constant here.
