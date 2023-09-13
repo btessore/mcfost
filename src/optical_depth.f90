@@ -1098,6 +1098,127 @@ end subroutine optical_length_tot_mol
       real(kind=dp), intent(in) :: x,y,z
       logical, intent(in) :: labs
       integer, intent(in) :: N
+      real(kind=dp), dimension(N), intent(in) :: lambda
+      real(kind=dp) :: x0, y0, z0, x1, y1, z1, l, l_contrib, l_void_before, Q, P(4)
+      real(kind=dp), dimension(N) :: Snu, tau, dtau, chi, coronal_irrad
+      integer :: nbr_cell, icell, next_cell, previous_cell, icell_star, i_star, la, icell_prev
+      logical :: lcellule_non_vide, lsubtract_avg, lintersect_stars
+
+      x1=x;y1=y;z1=z
+      x0=x;y0=y;z0=z
+      next_cell = icell_in
+      nbr_cell = 0
+      icell_prev = icell_in
+
+      tau(:) = 0.0_dp
+
+      Itot(:,iray,id) = 0.0_dp
+
+      ! Will the ray intersect a star
+      call intersect_stars(x,y,z, u,v,w, lintersect_stars, i_star, icell_star)
+      ! Boucle infinie sur les cellules (we go over the grid.)
+      infinie : do ! Boucle infinie
+      ! Indice de la cellule
+         icell = next_cell
+         x0=x1 ; y0=y1 ; z0=z1
+
+         lcellule_non_vide = (icell <= n_cells)
+         ! if (icell <= n_cells) then
+         !    lcellule_non_vide=.true.
+         ! else
+         !    lcellule_non_vide=.false.
+         ! endif
+
+         ! Test sortie ! "The ray has reach the end of the grid"
+         if (test_exit_grid(icell, x0, y0, z0)) return
+
+         if (lintersect_stars) then !"will interesct"
+            if (icell == icell_star) then!"has intersected"
+               Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau(:)) * &
+                  star_rad(id,iray,i_star,icell_prev,x0,y0,z0,u,v,w,N,lambda)
+               return
+            end if
+         endif
+         !With the Voronoi grid, somme cells can have a negative index
+         !therefore we need to test_exit_grid before using icompute_atom_rt
+         if (icell <= n_cells) then
+            lcellule_non_vide = (icompute_atomRT(icell) > 0)
+            if (icompute_atomRT(icell) < 0) then
+               if (icompute_atomRT(icell) == -1) then
+                  !If the optically thick region (dark zone) has a temperature
+                  !add a black body emission and leave.
+                  if (T(icell) > 0.0_dp) Itot(:,iray,id) = Itot(:,iray,id) + &
+                                    exp(-tau) * Bpnu(N,lambda,T(icell))
+                  return
+               else
+                  !Does not return but cell is empty (lcellule_non_vide is .false.)
+                  coronal_irrad = linear_1D_sorted(atmos_1d%Ncorona,atmos_1d%x_coro(:), &
+                                                   atmos_1d%I_coro(:,1),N,lambda)
+                  Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * coronal_irrad
+               endif
+            endif
+         endif
+
+         nbr_cell = nbr_cell + 1
+
+         ! Calcul longeur de vol et profondeur optique dans la cellule
+         previous_cell = 0 ! unused, just for Voronoi
+         call cross_cell(x0,y0,z0, u,v,w,  icell, previous_cell, x1,y1,z1, next_cell,l, l_contrib, l_void_before)
+
+         !count opacity only if the cell is filled, else go to next cell
+         if (lcellule_non_vide) then
+            lsubtract_avg = ((nbr_cell == 1).and.labs)
+            ! opacities in m^-1, l_contrib in au
+
+
+            call contopac_atom_loc(icell, N, lambda, chi, Snu)
+            call opacity_atom_bb_loc(id,icell,iray,x0,y0,z0,x1,y1,z1,u,v,w,&
+               l_void_before,l_contrib,lsubtract_avg,N,lambda,chi,Snu)
+
+            dtau(:) = l_contrib * chi(:) * AU_to_m !au * m^-1 * au_to_m
+
+            if (lsubtract_avg) then
+               !Lambda operator / chi_dag
+               !force PSI to be ray-by-ray but not ds !
+               !local, unaffected by vel.
+               psi(:,1,id) = ( 1.0_dp - exp( -dtau(:) ) ) / chi
+               ds(iray,id) = l_contrib * AU_to_m
+            endif
+
+            ! if (lorigine) then
+            !    if (maxval(ori(:,icell,id))==0.0_dp) then
+            !       ori(:,icell,id) = ori(:,icell,id) + eta(:,id) * exp(-tau(:))
+            !       tet(:,icell,id) = tet(:,icell,id) + tau(:) * exp(-tau(:))
+            !    endif
+            ! endif
+
+            Snu = Snu / chi
+
+            Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * (1.0_dp - exp(-dtau)) * Snu
+            tau(:) = tau(:) + dtau(:) !for next cell
+
+         end if  ! lcellule_non_vide
+
+         icell_prev = icell
+         !duplicate with previous_cell, but this avoid problem with Voronoi grid here
+
+      end do infinie
+
+      return
+   end subroutine integ_ray_atom
+   subroutine integ_ray_atom_tau(id,icell_in,x,y,z,u,v,w,iray,labs,N,lambda)
+   ! ------------------------------------------------------------------------------- !
+   ! TO DO: merge integ_ray_atom + integ_ray_line
+   ! Zeeman
+   ! scattering
+   ! level dissolution
+   ! dust
+   ! ------------------------------------------------------------------------------- !
+      integer, intent(in) :: id, icell_in, iray
+      real(kind=dp), intent(in) :: u,v,w
+      real(kind=dp), intent(in) :: x,y,z
+      logical, intent(in) :: labs
+      integer, intent(in) :: N
       real(kind=dp) :: tau_limit = 1d3
       real(kind=dp), dimension(N), intent(in), target :: lambda
       real(kind=dp) :: x0, y0, z0, x1, y1, z1, l, l_contrib, l_void_before, Q, P(4)
@@ -1106,7 +1227,8 @@ end subroutine optical_length_tot_mol
       integer :: nbr_cell, icell, next_cell, previous_cell, icell_star, i_star, la, icell_prev
       logical :: lcellule_non_vide, lsubtract_avg, lintersect_stars
       logical, dimension(N) :: lopt_thin_lam
-      real(kind=dp), dimension(:), pointer :: xe, xc, xl, index
+      real(kind=dp), dimension(:), pointer :: xe, xc, xl
+      integer, dimension(:), pointer :: index
 
       x1=x;y1=y;z1=z
       x0=x;y0=y;z0=z
@@ -1207,7 +1329,7 @@ end subroutine optical_length_tot_mol
             associate (xl => pack(lambda, lopt_thin_lam), xe => pack(Snu, lopt_thin_lam),  xc => pack(chi, lopt_thin_lam), &
                index => pack([(la,la=1,N)],lopt_thin_lam))
             !-> always evaluated on a small (cont)frequency grid and then interpolated at lambda.
-            write(*,*) "total N:", N, " computing opac for:", size(xl), "tmax=", maxval(tau)
+
                call contopac_atom(icell,xl,xc,xe)
                call lineopac_atom(id,icell,iray,x0,y0,z0,x1,y1,z1,u,v,w,&
                   l_void_before,l_contrib,lsubtract_avg,xl,xc,xe)
@@ -1248,7 +1370,7 @@ end subroutine optical_length_tot_mol
       end do infinie
 
       return
-   end subroutine integ_ray_atom
+   end subroutine integ_ray_atom_tau
 
 subroutine physical_length_atom(id,icell_in,x,y,z,u,v,w,N,lambda,tau_threshold,flag_sortie)
   ! Copmputes position where a given optical depth is reached

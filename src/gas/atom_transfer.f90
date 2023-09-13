@@ -27,7 +27,7 @@ module atom_transfer
         activate_continua, deactivate_continua
    use see, only : ngpop, Neq_ng, ngpop, alloc_nlte_var, dealloc_nlte_var, frac_limit_pops, &
                   init_rates, update_populations, accumulate_radrates_mali, write_rates, init_radrates_atom
-   use optical_depth, only : integ_ray_atom
+   use optical_depth, only : integ_ray_atom_tau
    use utils, only : cross_product, gauss_legendre_quadrature, progress_bar, rotation_3d, vacuum2air, &
          Ng_accelerate, Accelerate, check_ng_pops
    use dust_ray_tracing, only    : RT_n_incl, RT_n_az, init_directions_ray_tracing,tab_u_RT, tab_v_RT, tab_w_RT, &
@@ -392,7 +392,7 @@ module atom_transfer
                         !for one ray
                         if (.not.lforce_lte) then
                            !-> cannot compute radiative rates here if lforce_lte
-                           call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
+                           call integ_ray_atom_tau(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
                            call xcoupling(id, icell,1)
                            call accumulate_radrates_mali(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
@@ -425,7 +425,7 @@ module atom_transfer
 
                         !for one ray
                         if (.not.lforce_lte) then
-                           call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
+                           call integ_ray_atom_tau(id,icell,x0,y0,z0,u0,v0,w0,1,labs,n_lambda,tab_lambda_nm)
                            call xcoupling(id,icell,1)
                            call accumulate_radrates_mali(id, icell,1, weight)
                            ! Jnu(:,icell) = Jnu(:,icell) + weight * Itot(:,1,id)
@@ -1248,7 +1248,7 @@ module atom_transfer
                ! On se met au bord de la grille : propagation a l'envers
                call move_to_grid(id, x0,y0,z0,u0,v0,w0, icell,lintersect)
                if (lintersect) then ! On rencontre la grille, on a potentiellement du flux
-                  call integ_ray_atom(id,icell,x0,y0,z0,u0,v0,w0,iray,labs,n_lambda,tab_lambda_nm)
+                  call integ_ray_atom_tau(id,icell,x0,y0,z0,u0,v0,w0,iray,labs,n_lambda,tab_lambda_nm)
 
                   I0 = I0 + Itot(:,iray,id)
 
@@ -1667,7 +1667,7 @@ module atom_transfer
 
          call move_to_grid(id,x0,y0,z0,u0,v0,w0,icell0,lintersect)
          if (lintersect) then
-            call integ_ray_atom(id,icell0,x0,y0,z0,u0,v0,w0,j,labs,n_lambda,tab_lambda_nm)
+            call integ_ray_atom_tau(id,icell0,x0,y0,z0,u0,v0,w0,j,labs,n_lambda,tab_lambda_nm)
          endif
 
          !$omp atomic

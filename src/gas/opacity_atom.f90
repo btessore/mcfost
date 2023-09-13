@@ -512,7 +512,12 @@ module Opacity_atom
       real(kind=dp) :: dv
       type(AtomType), pointer :: atom
       real(kind=dp), dimension(Nlambda_max_line) :: phi0
-      real(kind=dp), dimension(:), pointer :: la, index
+      real(kind=dp), dimension(:), pointer :: la
+      integer, dimension(:), pointer :: index
+      integer, dimension(:), allocatable :: lam_indexes
+      logical, dimension(:), allocatable :: lin_line
+
+      lam_indexes = [(m,m=1,size(lambda))]
 
       dv = 0.0_dp
       if (lnon_lte_loop.and..not.iterate) then !not iterate but non-LTE
@@ -546,9 +551,9 @@ module Opacity_atom
             !the wavelength grid lambda does not contain the line
             !maybe it is not needed
             ! if ((tab_lambda_nm(Nblue)>maxval(lambda)).or.(tab_lambda_nm(Nred)<minval(lambda))) cycle tr_loop
+            lin_line = (lambda >= tab_lambda_nm(Nblue)).and.(lambda <= tab_lambda_nm(Nred))
 
-            associate(la => pack(lambda, (lambda >= tab_lambda_nm(Nblue)).and.(lambda <= tab_lambda_nm(Nred))),&
-               index => pack([(m,m=1,size(lambda))],(lambda >= tab_lambda_nm(Nblue)).and.(lambda <= tab_lambda_nm(Nred))))
+            associate(index => pack(lam_indexes,lin_line),la => pack(lambda, lin_line))
 
                Nlam = size(la) ! < size(phi0) anyway
                ! if (Nlam == 0) cycle tr_loop
