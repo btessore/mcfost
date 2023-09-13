@@ -553,6 +553,8 @@ module Opacity_atom
             ! if ((tab_lambda_nm(Nblue)>maxval(lambda)).or.(tab_lambda_nm(Nred)<minval(lambda))) cycle tr_loop
             lin_line = (lambda >= tab_lambda_nm(Nblue)).and.(lambda <= tab_lambda_nm(Nred))
 
+!-> this one takes to much time and makes the whole method pointless
+!-> what could I do ? 
             associate(index => pack(lam_indexes,lin_line),la => pack(lambda, lin_line))
 
                Nlam = size(la) ! < size(phi0) anyway
