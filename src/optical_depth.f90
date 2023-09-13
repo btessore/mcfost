@@ -1118,8 +1118,6 @@ end subroutine optical_length_tot_mol
 
       Itot(:,iray,id) = 0.0_dp
 
-      lopt_thin_lam(:) = .false.
-
       ! Will the ray intersect a star
       call intersect_stars(x,y,z, u,v,w, lintersect_stars, i_star, icell_star)
       ! Boucle infinie sur les cellules (we go over the grid.)
@@ -1180,9 +1178,13 @@ end subroutine optical_length_tot_mol
             !only if a tau_limit has not been reached yet.
             !After, exp(-tau) goes to 0 and I is never updated anymore.
             !Assuming Snu * exp(-tau) is 0 when tau > tau_limit (finite Snu).
-            tau = 1d4
-            tau(300) = 0
-            where (tau < tau_limit) lopt_thin_lam = .true.
+            ! tau = 1d4
+            ! tau(300) = 0
+            where (tau < tau_limit) 
+               lopt_thin_lam = .true.
+            elsewhere
+               lopt_thin_lam = .false.
+            endwhere
 
             !-> not working ??
             ! index = pack([(la,la=1,N)],lopt_thin_lam)
@@ -1205,6 +1207,7 @@ end subroutine optical_length_tot_mol
             associate (xl => pack(lambda, lopt_thin_lam), xe => pack(Snu, lopt_thin_lam),  xc => pack(chi, lopt_thin_lam), &
                index => pack([(la,la=1,N)],lopt_thin_lam))
             !-> always evaluated on a small (cont)frequency grid and then interpolated at lambda.
+            write(*,*) "total N:", N, " computing opac for:", size(xl), "tmax=", maxval(tau)
                call contopac_atom(icell,xl,xc,xe)
                call lineopac_atom(id,icell,iray,x0,y0,z0,x1,y1,z1,u,v,w,&
                   l_void_before,l_contrib,lsubtract_avg,xl,xc,xe)

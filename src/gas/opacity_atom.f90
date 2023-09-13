@@ -508,11 +508,11 @@ module Opacity_atom
       real(kind=dp), intent(in), dimension(:), target :: lambda
       real(kind=dp), intent(inout), dimension(:) :: chi, Snu
       real(kind=dp), intent(in) :: x, y, z, x1, y1, z1, u, v, w, l_void_before,l_contrib
-      integer :: nat, Nred, Nblue, kr, i, j, Nlam
+      integer :: nat, Nred, Nblue, kr, i, j, Nlam, m
       real(kind=dp) :: dv
       type(AtomType), pointer :: atom
       real(kind=dp), dimension(Nlambda_max_line) :: phi0
-      real(kind=dp), dimension(:), pointer :: la
+      real(kind=dp), dimension(:), pointer :: la, index
 
       dv = 0.0_dp
       if (lnon_lte_loop.and..not.iterate) then !not iterate but non-LTE
@@ -544,29 +544,29 @@ module Opacity_atom
             endif
 
             !the wavelength grid lambda does not contain the line
-            if ((tab_lambda_nm(Nblue)>maxval(lambda)).or.(tab_lambda_nm(Nred)<minval(lambda))) cycle tr_loop
+            !maybe it is not needed
+            ! if ((tab_lambda_nm(Nblue)>maxval(lambda)).or.(tab_lambda_nm(Nred)<minval(lambda))) cycle tr_loop
 
-            associate(la => pack(lambda, (lambda >= tab_lambda_nm(Nblue))))
+            associate(la => pack(lambda, (lambda >= tab_lambda_nm(Nblue)).and.(lambda <= tab_lambda_nm(Nred))),&
+               index => pack([(m,m=1,size(lambda))],(lambda >= tab_lambda_nm(Nblue)).and.(lambda <= tab_lambda_nm(Nred))))
 
-               !locate index of the line on that subgrid ??
-               !using where instead of associate region ??
+               Nlam = size(la) ! < size(phi0) anyway
+               ! if (Nlam == 0) cycle tr_loop
 
                phi0(1:Nlam) = profile_art(atom%lines(kr),id,icell,iray,iterate,Nlam,la,&
                                  x,y,z,x1,y1,z1,u,v,w,l_void_before,l_contrib)
 
-               where ((tab_lambda_nm(Nblue)>lambda).or.(tab_lambda_nm(Nred)<lambda))
+               !chi and Snu smaller arrays of size lambda i.e. tab_lambda_nm if lopt_thin_line is True.
+               chi([(index(m),m=1,size(la))]) = chi([(index(m),m=1,size(la))]) + &
+                  hc_fourPI * atom%lines(kr)%Bij * phi0(1:Nlam) * (atom%n(i,icell) - atom%lines(kr)%gij*atom%n(j,icell))
 
-                  chi(:) = chi(:) + &
-                     hc_fourPI * atom%lines(kr)%Bij * phi0(1:Nlam) * (atom%n(i,icell) - atom%lines(kr)%gij*atom%n(j,icell))
+               Snu([(index(m),m=1,size(la))]) = Snu([(index(m),m=1,size(la))]) + &
+                  hc_fourPI * atom%lines(kr)%Aji * phi0(1:Nlam) * atom%n(j,icell)
 
-                  Snu(:) = Snu(:) + &
-                     hc_fourPI * atom%lines(kr)%Aji * phi0(1:Nlam) * atom%n(j,icell)
-
-               endwhere
-               if ((iterate.and.atom%active)) then
-                  phi_loc(1:Nlam,atom%ij_to_trans(i,j),atom%activeindex,iray,id) = phi0(1:Nlam)
-               endif
             endassociate
+            if ((iterate.and.atom%active)) then
+               phi_loc(1:Nlam,atom%ij_to_trans(i,j),atom%activeindex,iray,id) = phi0(1:Nlam)
+            endif
 
          end do tr_loop
 
