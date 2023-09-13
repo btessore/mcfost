@@ -327,6 +327,45 @@ module Opacity_atom
 
       return
    end subroutine contopac_atom_loc
+   subroutine contopac_atom(icell,lambda,chi,snu)
+      integer, intent(in) :: icell
+      real(kind=dp), intent(in), dimension(:) :: lambda
+      real(kind=dp), intent(inout), dimension(:) :: chi, Snu
+      real(kind=dp), dimension(N_lambda_cont) :: chic, snuc
+      integer :: la, lac, i0, N
+      real(kind=dp) :: w
+
+      if (llimit_mem) then
+         !init continuous opacity with background gas continuum.
+         call background_continua_lambda(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
+         !Snu = Snu + scat(lambda, icell) * Jnu(:,icell)
+         !accumulate b-f
+         call opacity_atom_bf_loc(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
+      else
+         chic(:) = chi_cont(:,icell)
+         snuc(:) = eta_cont(:,icell)
+      endif
+
+      N = size(lambda)
+
+      !linear interpolation
+      i0 = 2
+      do la=1, N
+         loop_i : do lac=i0, n_lambda_cont
+            if (tab_lambda_cont(lac) > lambda(la)) then
+               w = (lambda(la) - tab_lambda_cont(lac-1)) / (tab_lambda_cont(lac) - tab_lambda_cont(lac-1))
+               chi(la) = (1.0_dp - w) * chic(lac-1)  + w * chic(lac)
+               snu(la) = (1.0_dp - w) * snuc(lac-1)  + w * snuc(lac)
+               i0 = lac
+               exit loop_i
+            endif
+         enddo loop_i
+      enddo
+      chi(N) = chic(n_lambda_cont)
+      snu(N) = snuc(n_lambda_cont)
+
+      return
+   end subroutine contopac_atom
 
    subroutine opacity_atom_bf_loc(icell,N,lambda,chi,Snu)
    !to do: remove lambda dep since it must be consistent with Nr, Nb
@@ -462,6 +501,82 @@ module Opacity_atom
 
       return
    end subroutine opacity_atom_bb_loc
+   subroutine lineopac_atom(id, icell, iray, x, y, z, x1, y1, z1, u, v, w, l_void_before,l_contrib,iterate,lambda,chi,Snu)
+
+      integer, intent(in) :: id, icell, iray
+      logical, intent(in) :: iterate
+      real(kind=dp), intent(in), dimension(:), target :: lambda
+      real(kind=dp), intent(inout), dimension(:) :: chi, Snu
+      real(kind=dp), intent(in) :: x, y, z, x1, y1, z1, u, v, w, l_void_before,l_contrib
+      integer :: nat, Nred, Nblue, kr, i, j, Nlam
+      real(kind=dp) :: dv
+      type(AtomType), pointer :: atom
+      real(kind=dp), dimension(Nlambda_max_line) :: phi0
+      real(kind=dp), dimension(:), pointer :: la
+
+      dv = 0.0_dp
+      if (lnon_lte_loop.and..not.iterate) then !not iterate but non-LTE
+         dv = calc_vloc(icell,u,v,w,x,y,z,x1,y1,z1) - vlabs(iray,id)
+      endif
+
+      atom_loop : do nat = 1, N_Atoms
+         atom => Atoms(nat)%p
+
+         tr_loop : do kr = 1,atom%Nline
+
+            if (.not.atom%lines(kr)%lcontrib) cycle
+
+
+            Nred = atom%lines(kr)%Nr; Nblue = atom%lines(kr)%Nb
+            Nlam = atom%lines(kr)%Nlambda
+            i = atom%lines(kr)%i; j = atom%lines(kr)%j
+
+            if ((atom%n(i,icell) - atom%n(j,icell)*atom%lines(kr)%gij) <= 0.0_dp) cycle tr_loop
+
+            !Expand the edge of a profile during the non-LTE loop if necessary.
+            !the condition is only possibly reached if dv > 0 (lnon_lte_loop = .true.)
+            if (lnon_lte_loop) then
+               if (abs(dv)>1.0*vbroad(T(icell),Atom%weight, vturb(icell))) then
+                  Nred = atom%lines(kr)%Nover_sup
+                  Nblue = atom%lines(kr)%Nover_inf
+                  Nlam = Nred - Nblue + 1
+               endif
+            endif
+
+            !the wavelength grid lambda does not contain the line
+            if ((tab_lambda_nm(Nblue)>maxval(lambda)).or.(tab_lambda_nm(Nred)<minval(lambda))) cycle tr_loop
+
+            associate(la => pack(lambda, (lambda >= tab_lambda_nm(Nblue))))
+
+               !locate index of the line on that subgrid ??
+               !using where instead of associate region ??
+
+               phi0(1:Nlam) = profile_art(atom%lines(kr),id,icell,iray,iterate,Nlam,la,&
+                                 x,y,z,x1,y1,z1,u,v,w,l_void_before,l_contrib)
+
+               where ((tab_lambda_nm(Nblue)>lambda).or.(tab_lambda_nm(Nred)<lambda))
+
+                  chi(:) = chi(:) + &
+                     hc_fourPI * atom%lines(kr)%Bij * phi0(1:Nlam) * (atom%n(i,icell) - atom%lines(kr)%gij*atom%n(j,icell))
+
+                  Snu(:) = Snu(:) + &
+                     hc_fourPI * atom%lines(kr)%Aji * phi0(1:Nlam) * atom%n(j,icell)
+
+               endwhere
+               if ((iterate.and.atom%active)) then
+                  phi_loc(1:Nlam,atom%ij_to_trans(i,j),atom%activeindex,iray,id) = phi0(1:Nlam)
+               endif
+            endassociate
+
+         end do tr_loop
+
+         atom => null()
+
+      end do atom_loop
+
+
+      return
+   end subroutine lineopac_atom
 
 
    subroutine xcoupling(id, icell, iray)

@@ -11,7 +11,7 @@ module optical_depth
   use radiation_field, only : save_radiation_field
   use density
   use stars, only : intersect_stars, star_rad
-  use opacity_atom, only : opacity_atom_bb_loc, contopac_atom_loc, Itot, psi
+  use opacity_atom, only : opacity_atom_bb_loc, contopac_atom_loc, Itot, psi, contopac_atom, lineopac_atom
 
   implicit none
 
@@ -1098,11 +1098,15 @@ end subroutine optical_length_tot_mol
       real(kind=dp), intent(in) :: x,y,z
       logical, intent(in) :: labs
       integer, intent(in) :: N
-      real(kind=dp), dimension(N), intent(in) :: lambda
+      real(kind=dp) :: tau_limit = 1d3
+      real(kind=dp), dimension(N), intent(in), target :: lambda
       real(kind=dp) :: x0, y0, z0, x1, y1, z1, l, l_contrib, l_void_before, Q, P(4)
-      real(kind=dp), dimension(N) :: Snu, tau, dtau, chi, coronal_irrad
+      real(kind=dp), dimension(N) :: tau, dtau, coronal_irrad
+      real(kind=dp), dimension(N), target :: Snu, chi
       integer :: nbr_cell, icell, next_cell, previous_cell, icell_star, i_star, la, icell_prev
       logical :: lcellule_non_vide, lsubtract_avg, lintersect_stars
+      logical, dimension(N) :: lopt_thin_lam
+      real(kind=dp), dimension(:), pointer :: xe, xc, xl, index
 
       x1=x;y1=y;z1=z
       x0=x;y0=y;z0=z
@@ -1113,6 +1117,8 @@ end subroutine optical_length_tot_mol
       tau(:) = 0.0_dp
 
       Itot(:,iray,id) = 0.0_dp
+
+      lopt_thin_lam(:) = .false.
 
       ! Will the ray intersect a star
       call intersect_stars(x,y,z, u,v,w, lintersect_stars, i_star, icell_star)
@@ -1170,32 +1176,66 @@ end subroutine optical_length_tot_mol
             lsubtract_avg = ((nbr_cell == 1).and.labs)
             ! opacities in m^-1, l_contrib in au
 
+            !computes opacities and update tau, Snu and, I,
+            !only if a tau_limit has not been reached yet.
+            !After, exp(-tau) goes to 0 and I is never updated anymore.
+            !Assuming Snu * exp(-tau) is 0 when tau > tau_limit (finite Snu).
+            tau = 1d4
+            tau(300) = 0
+            where (tau < tau_limit) lopt_thin_lam = .true.
 
-            call contopac_atom_loc(icell, N, lambda, chi, Snu)
-            call opacity_atom_bb_loc(id,icell,iray,x0,y0,z0,x1,y1,z1,u,v,w,&
-               l_void_before,l_contrib,lsubtract_avg,N,lambda,chi,Snu)
+            !-> not working ??
+            ! index = pack([(la,la=1,N)],lopt_thin_lam)
+            ! xe => Snu([(index(la),la=1,size(index))])
 
-            dtau(:) = l_contrib * chi(:) * AU_to_m !au * m^-1 * au_to_m
+            ! Snu = 0.0
+            ! associate(xl => pack(lambda,lopt_thin_lam),xe=>pack(snu,lopt_thin_lam),index => pack([(la,la=1,N)],lopt_thin_lam))
 
+            ! write(*,*) "xl=",xl
+            ! xe(:) = 3.0
+            ! Snu([(index(la),la=1,size(xl))]) = xe(:)
+            ! endassociate
+            ! write(*,*) "Snu=",snu
+            ! write(*,*) locate(snu, 3d0)
+
+            ! stop
+
+            !computes opacities for a smaller array
+            !broken if lopt_thin_lam is all .false.. The return below prevents from that happenning?
+            associate (xl => pack(lambda, lopt_thin_lam), xe => pack(Snu, lopt_thin_lam),  xc => pack(chi, lopt_thin_lam), &
+               index => pack([(la,la=1,N)],lopt_thin_lam))
+            !-> always evaluated on a small (cont)frequency grid and then interpolated at lambda.
+               call contopac_atom(icell,xl,xc,xe)
+               call lineopac_atom(id,icell,iray,x0,y0,z0,x1,y1,z1,u,v,w,&
+                  l_void_before,l_contrib,lsubtract_avg,xl,xc,xe)
+
+            ! dtau(:) = l_contrib * chi(:) * AU_to_m !au * m^-1 * au_to_m
+               dtau([(index(la),la=1,size(xl))]) = l_contrib * xc(:) * AU_to_m
+               Snu([(index(la),la=1,size(xl))]) = xe(:) / xc(:)
+               chi([(index(la),la=1,size(xl))]) = xc(:)
+            endassociate
+
+            !even with tau_limit we always evaluate that.
+            !the first cell has tau=0 in the non-LTE loop.
             if (lsubtract_avg) then
                !Lambda operator / chi_dag
                !force PSI to be ray-by-ray but not ds !
                !local, unaffected by vel.
-               psi(:,1,id) = ( 1.0_dp - exp( -dtau(:) ) ) / chi
+               where (lopt_thin_lam)&
+                  psi(:,1,id) = ( 1.0_dp - exp( -dtau(:) ) ) / chi
                ds(iray,id) = l_contrib * AU_to_m
             endif
 
-            ! if (lorigine) then
-            !    if (maxval(ori(:,icell,id))==0.0_dp) then
-            !       ori(:,icell,id) = ori(:,icell,id) + eta(:,id) * exp(-tau(:))
-            !       tet(:,icell,id) = tet(:,icell,id) + tau(:) * exp(-tau(:))
-            !    endif
-            ! endif
 
-            Snu = Snu / chi
+            where (lopt_thin_lam)
+               Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * (1.0_dp - exp(-dtau)) * Snu
+               tau(:) = tau(:) + dtau(:) !for next cell
+            endwhere
+            ! Snu = Snu / chi
 
-            Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * (1.0_dp - exp(-dtau)) * Snu
-            tau(:) = tau(:) + dtau(:) !for next cell
+            ! Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * (1.0_dp - exp(-dtau)) * Snu
+            ! tau(:) = tau(:) + dtau(:) !for next cell
+            if (all(.not.lopt_thin_lam)) return
 
          end if  ! lcellule_non_vide
 
