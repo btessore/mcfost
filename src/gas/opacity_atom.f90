@@ -896,19 +896,19 @@ module Opacity_atom
 
       if (line%voigt) then
          u1(1) = u0 - omegav(1,id)/vth
-         if (lnon_lte_loop) then!approximate for non-LTE
-            profile_art_mono(1) = VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
-            do nv=2, Nvspace
-               u1(1) = u0 - omegav(nv,id)/vth
-               profile_art_mono(1) = profile_art_mono(1) + VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
-            enddo
-         else!accurate for images
+         ! if (lnon_lte_loop) then!approximate for non-LTE
+         !    profile_art_mono(1) = VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
+         !    do nv=2, Nvspace
+         !       u1(1) = u0 - omegav(nv,id)/vth
+         !       profile_art_mono(1) = profile_art_mono(1) + VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
+         !    enddo
+         ! else!accurate for images
             profile_art_mono = Voigt(1, line%a(icell), u1(1))
             do nv=2, Nvspace
                u1(1) = u0 - omegav(nv,id)/vth
                profile_art_mono = profile_art_mono + Voigt(1, line%a(icell), u1(1))
             enddo
-         endif
+         ! endif
 
       else
          u0sq = u0*u0
