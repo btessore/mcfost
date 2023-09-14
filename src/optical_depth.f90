@@ -1333,8 +1333,7 @@ end subroutine optical_length_tot_mol
                !Lambda operator / chi_dag
                !force PSI to be ray-by-ray but not ds !
                !local, unaffected by vel.
-               where (lopt_thin_lam)&
-                  psi(:,1,id) = ( 1.0_dp - exp( -dtau(:) ) ) / chi
+               psi(:,1,id) = ( 1.0_dp - exp( -dtau(:) ) ) / chi
                ds(iray,id) = l_contrib * AU_to_m
             endif
 

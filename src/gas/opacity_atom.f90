@@ -290,7 +290,7 @@ module Opacity_atom
       call dealloc_gas_contopac()
       if (allocated(chi_cont)) deallocate(chi_cont,eta_cont)
 
-      if (allocated(omegav,Nvel_points)) deallocate(omegav)
+      if (allocated(omegav)) deallocate(omegav,Nvel_points)
       if (allocated(art_lines)) deallocate(art_lines)
 
       do nat=1, n_atoms
