@@ -87,10 +87,18 @@ module atom_type
       real(kind=dp), allocatable :: Gamma(:,:,:), dgdne(:,:,:) !derivative of Gamma to ne (n_iterate_ne>0)
       real(kind=dp), dimension(:,:), pointer :: n, nstar
       ! real(kind=dp), dimension(:,:) :: phi_T !such that nexphi_T = ni/nj
-      type (AtomicLine), allocatable, dimension(:)         :: lines
-      type (AtomicContinuum) , allocatable, dimension(:)   :: continua
+      type (AtomicLine), allocatable, dimension(:) :: lines
+      type (AtomicContinuum) , allocatable, dimension(:)    :: continua
    end type AtomType
 
+   type activelines !also passive lines
+      integer :: Ntrans
+      type (linepointers), allocatable, dimension(:) :: art
+   end type activelines
+   type linepointers
+      type (AtomicLine), pointer :: p => Null()
+   end type linepointers
+   type (activelines), dimension(:), allocatable :: art_lines
 
    type atomPointerArray
       type(AtomType), pointer :: p => NULL()

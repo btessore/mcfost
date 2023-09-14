@@ -24,6 +24,8 @@ module Opacity_atom
    real(kind=dp), allocatable :: Itot(:,:,:), psi(:,:,:), phi_loc(:,:,:,:,:), vlabs(:,:)
    real(kind=dp), allocatable :: eta_atoms(:,:,:), Uji_down(:,:,:,:), chi_up(:,:,:,:), chi_down(:,:,:,:), chi_tot(:), eta_tot(:)
    integer, parameter 		   :: NvspaceMax = 151
+   integer, dimension(:), allocatable :: Nvel_points
+   real(kind=dp), dimension(:,:), allocatable :: omegav
    logical 		               :: lnon_lte_loop
 
    contains
@@ -116,11 +118,65 @@ module Opacity_atom
       return 
    end subroutine activate_continua
 
+   subroutine setup_activelines_list()
+   !TO DO: smarter way
+   !TO DO: add continuum
+      integer :: l, nat, kr, nb, nr, ntr
+      real(kind=dp) :: dl
+      type (AtomType), pointer :: at
+
+      ! allocate(art_lines(n_lambda))
+      ! allocate(art_lines(1)%art(1))
+      ! art_lines(1)%art(1)%p => hydrogen%lines(1)
+
+      ! write(*,*) art_lines(1)%art(1)%p%lambda0, hydrogen%lines(1)%lambda0
+      ! stop
+
+      allocate(art_lines(n_lambda))
+      !first, count number of transitions active at a given frequency
+      !could be better
+      do l=1, n_lambda
+         art_lines(l)%Ntrans = 0
+         do nat=1, n_atoms
+            at => atoms(nat)%p
+            tr_loop : do kr = 1,at%Nline
+               if (.not.at%lines(kr)%lcontrib) cycle tr_loop
+               nb = at%lines(kr)%Nb; nr = at%lines(kr)%Nr
+               dl = max(at%lines(kr)%lambda0-tab_lambda_nm(Nb),tab_lambda_nm(Nr)-at%lines(kr)%lambda0)
+               if (abs(tab_lambda_nm(l) - at%lines(kr)%lambda0) <= dl) then
+                     art_lines(l)%Ntrans = art_lines(l)%Ntrans + 1
+               endif
+            enddo tr_loop
+         enddo
+         ! write(*,*) " There are", art_lines(l)%Ntrans," active lines at that lambda", tab_lambda_nm(l)
+      enddo
+
+      !then setup the pointers
+      do l=1, n_lambda
+         allocate(art_lines(l)%art(art_lines(l)%Ntrans))
+         ntr = 0
+         do nat=1, n_atoms
+            at => atoms(nat)%p
+            tr_loopb : do kr = 1,at%Nline
+               if (.not.at%lines(kr)%lcontrib) cycle tr_loopb
+               nb = at%lines(kr)%Nb; nr = at%lines(kr)%Nr
+               dl = max(at%lines(kr)%lambda0-tab_lambda_nm(Nb),tab_lambda_nm(Nr)-at%lines(kr)%lambda0)
+               if (abs(tab_lambda_nm(l) - at%lines(kr)%lambda0) <= dl) then
+                     ntr = ntr + 1
+                     art_lines(l)%art(ntr)%p => at%lines(kr)
+               endif
+            enddo tr_loopb
+         enddo
+      enddo
+
+      return
+   endsubroutine setup_activelines_list
+
    !could be parralel
    subroutine alloc_atom_opac(N,x)
       integer, intent(in) :: N
       real(kind=dp), dimension(N) :: x
-      integer :: nat, kr, icell, nb, nr
+      integer :: nat, kr, icell, nb, nr!, NmaxLine
       type(AtomType), pointer :: atm
       real(kind=dp) :: vth
       integer(kind=8) :: mem_loc, mem_contopac
@@ -130,6 +186,13 @@ module Opacity_atom
       ! call alloc_gas_contopac(N,x)
       !-> on a small grid and interpolated later
       call alloc_gas_contopac(n_lambda_cont,tab_lambda_cont)
+
+      allocate(omegav(NvspaceMax,nb_proc),Nvel_points(nb_proc)); omegav = 0.0_dp
+      mem_loc = mem_loc + sizeof(omegav) + sizeof(Nvel_points)
+
+      call setup_activelines_list()
+      mem_loc = mem_loc + sizeof(art_lines)
+      ! write(*,*) "size art_lines:", sizeof(art_lines) / 1024.**3, 'GB'
 
       do nat=1, n_atoms
          atm => atoms(nat)%p
@@ -226,6 +289,9 @@ module Opacity_atom
 
       call dealloc_gas_contopac()
       if (allocated(chi_cont)) deallocate(chi_cont,eta_cont)
+
+      if (allocated(omegav,Nvel_points)) deallocate(omegav)
+      if (allocated(art_lines)) deallocate(art_lines)
 
       do nat=1, n_atoms
          atm => atoms(nat)%p
@@ -327,42 +393,30 @@ module Opacity_atom
 
       return
    end subroutine contopac_atom_loc
-   subroutine contopac_atom(icell,lambda,chi,snu)
-      integer, intent(in) :: icell
-      real(kind=dp), intent(in), dimension(:) :: lambda
-      real(kind=dp), intent(inout), dimension(:) :: chi, Snu
-      real(kind=dp), dimension(N_lambda_cont) :: chic, snuc
-      integer :: la, lac, i0, N
-      real(kind=dp) :: w
-
-      if (llimit_mem) then
-         !init continuous opacity with background gas continuum.
-         call background_continua_lambda(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
-         !Snu = Snu + scat(lambda, icell) * Jnu(:,icell)
-         !accumulate b-f
-         call opacity_atom_bf_loc(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
-      else
-         chic(:) = chi_cont(:,icell)
-         snuc(:) = eta_cont(:,icell)
-      endif
-
-      N = size(lambda)
+   subroutine contopac_atom(icell,i0,ilam,chic,snuc,chi,snu)
+      integer, intent(in) :: icell, ilam
+      integer, intent(inout)  :: i0
+      real(kind=dp), intent(inout) :: chi, Snu
+      real(kind=dp), dimension(N_lambda_cont), intent(in) :: chic, snuc
+      integer :: la, lac, N
+      real(kind=dp) :: w, lam
 
       !linear interpolation
-      i0 = 2
-      do la=1, N
-         loop_i : do lac=i0, n_lambda_cont
-            if (tab_lambda_cont(lac) > lambda(la)) then
-               w = (lambda(la) - tab_lambda_cont(lac-1)) / (tab_lambda_cont(lac) - tab_lambda_cont(lac-1))
-               chi(la) = (1.0_dp - w) * chic(lac-1)  + w * chic(lac)
-               snu(la) = (1.0_dp - w) * snuc(lac-1)  + w * snuc(lac)
-               i0 = lac
-               exit loop_i
-            endif
-         enddo loop_i
-      enddo
-      chi(N) = chic(n_lambda_cont)
-      snu(N) = snuc(n_lambda_cont)
+      lam = tab_lambda_nm(ilam)
+      loop_i : do lac=i0, n_lambda_cont
+         if (tab_lambda_cont(lac) > lam) then
+            w = (lam - tab_lambda_cont(lac-1)) / (tab_lambda_cont(lac) - tab_lambda_cont(lac-1))
+            chi = (1.0_dp - w) * chic(lac-1)  + w * chic(lac)
+            snu = (1.0_dp - w) * snuc(lac-1)  + w * snuc(lac)
+            i0 = lac
+            exit loop_i
+         endif
+      enddo loop_i
+
+      if (ilam==n_lambda) then
+         chi = chic(n_lambda_cont)
+         snu = snuc(n_lambda_cont)
+      endif
 
       return
    end subroutine contopac_atom
@@ -501,85 +555,64 @@ module Opacity_atom
 
       return
    end subroutine opacity_atom_bb_loc
-   subroutine lineopac_atom(id, icell, iray, x, y, z, x1, y1, z1, u, v, w, l_void_before,l_contrib,iterate,lambda,chi,Snu)
+   subroutine lineopac_atom(id, icell, iray, iterate, ilam, chi, Snu)
 
-      integer, intent(in) :: id, icell, iray
+      integer, intent(in) :: id, icell, iray, ilam
       logical, intent(in) :: iterate
-      real(kind=dp), intent(in), dimension(:), target :: lambda
-      real(kind=dp), intent(inout), dimension(:) :: chi, Snu
-      real(kind=dp), intent(in) :: x, y, z, x1, y1, z1, u, v, w, l_void_before,l_contrib
-      integer :: nat, Nred, Nblue, kr, i, j, Nlam, m
-      real(kind=dp) :: dv
-      type(AtomType), pointer :: atom
-      real(kind=dp), dimension(Nlambda_max_line) :: phi0
-      real(kind=dp), dimension(:), pointer :: la
-      integer, dimension(:), pointer :: index
-      integer, dimension(:), allocatable :: lam_indexes
-      logical, dimension(:), allocatable :: lin_line
+      real(kind=dp), intent(inout) :: chi, Snu
+      integer :: nat, Nred, Nblue, kr, i, j, Nlam, la
+      real(kind=dp) :: dv, lam, phi0(1)
+      type(AtomicLine), pointer :: line
 
-      lam_indexes = [(m,m=1,size(lambda))]
+      lam = tab_lambda_nm(ilam)
 
+   !-> this should be outside + need common gauss prof outside
       dv = 0.0_dp
       if (lnon_lte_loop.and..not.iterate) then !not iterate but non-LTE
-         dv = calc_vloc(icell,u,v,w,x,y,z,x1,y1,z1) - vlabs(iray,id)
+         !the mean of omegav is essentially the same as vloc (2points).
+         dv = sum(omegav(1:Nvel_points(id),id))/real(Nvel_points(id)) - vlabs(iray,id)
       endif
 
-      atom_loop : do nat = 1, N_Atoms
-         atom => Atoms(nat)%p
+      !loop over lines at that frequency
+      do kr = 1, art_lines(ilam)%Ntrans
+         line => art_lines(ilam)%art(kr)%p
 
-         tr_loop : do kr = 1,atom%Nline
+         Nred = line%Nr; Nblue = line%Nb
+         Nlam = line%Nlambda
+         i = line%i; j = line%j
 
-            if (.not.atom%lines(kr)%lcontrib) cycle
+         !move outside ?
+         if ((line%atom%n(i,icell) - line%atom%n(j,icell)*line%gij) <= 0.0_dp) cycle
 
 
-            Nred = atom%lines(kr)%Nr; Nblue = atom%lines(kr)%Nb
-            Nlam = atom%lines(kr)%Nlambda
-            i = atom%lines(kr)%i; j = atom%lines(kr)%j
-
-            if ((atom%n(i,icell) - atom%n(j,icell)*atom%lines(kr)%gij) <= 0.0_dp) cycle tr_loop
-
-            !Expand the edge of a profile during the non-LTE loop if necessary.
-            !the condition is only possibly reached if dv > 0 (lnon_lte_loop = .true.)
-            if (lnon_lte_loop) then
-               if (abs(dv)>1.0*vbroad(T(icell),Atom%weight, vturb(icell))) then
-                  Nred = atom%lines(kr)%Nover_sup
-                  Nblue = atom%lines(kr)%Nover_inf
-                  Nlam = Nred - Nblue + 1
-               endif
+         if (lnon_lte_loop) then
+            if (abs(dv)>1.0*vbroad(T(icell),line%Atom%weight, vturb(icell))) then
+               Nred = line%Nover_sup
+               Nblue = line%Nover_inf
+               Nlam = Nred - Nblue + 1
             endif
+         endif
 
-            !the wavelength grid lambda does not contain the line
-            !maybe it is not needed
-            ! if ((tab_lambda_nm(Nblue)>maxval(lambda)).or.(tab_lambda_nm(Nred)<minval(lambda))) cycle tr_loop
-            lin_line = (lambda >= tab_lambda_nm(Nblue)).and.(lambda <= tab_lambda_nm(Nred))
+         phi0 = profile_art_mono(line,id,icell,lam)
 
-!-> this one takes to much time and makes the whole method pointless
-!-> what could I do ? 
-            associate(index => pack(lam_indexes,lin_line),la => pack(lambda, lin_line))
+         chi = chi + &
+            hc_fourPI * line%Bij * phi0(1) * (line%atom%n(i,icell) - line%gij*line%atom%n(j,icell))
 
-               Nlam = size(la) ! < size(phi0) anyway
-               ! if (Nlam == 0) cycle tr_loop
+         Snu = Snu + &
+            hc_fourPI * line%Aji * phi0(1) * line%atom%n(j,icell)
 
-               phi0(1:Nlam) = profile_art(atom%lines(kr),id,icell,iray,iterate,Nlam,la,&
-                                 x,y,z,x1,y1,z1,u,v,w,l_void_before,l_contrib)
 
-               !chi and Snu smaller arrays of size lambda i.e. tab_lambda_nm if lopt_thin_line is True.
-               chi([(index(m),m=1,size(la))]) = chi([(index(m),m=1,size(la))]) + &
-                  hc_fourPI * atom%lines(kr)%Bij * phi0(1:Nlam) * (atom%n(i,icell) - atom%lines(kr)%gij*atom%n(j,icell))
+         if ((iterate.and.line%atom%active)) then
+            !index on Nlam
+            la = ilam - Nblue + 1 !1 if Nblue == la
+                                  !when la == Nred -> Nlam
+            phi_loc(la,line%atom%ij_to_trans(i,j),line%atom%activeindex,iray,id) = phi0(1)
+         endif
 
-               Snu([(index(m),m=1,size(la))]) = Snu([(index(m),m=1,size(la))]) + &
-                  hc_fourPI * atom%lines(kr)%Aji * phi0(1:Nlam) * atom%n(j,icell)
 
-            endassociate
-            if ((iterate.and.atom%active)) then
-               phi_loc(1:Nlam,atom%ij_to_trans(i,j),atom%activeindex,iray,id) = phi0(1:Nlam)
-            endif
+         line => null()
 
-         end do tr_loop
-
-         atom => null()
-
-      end do atom_loop
+      end do
 
 
       return
@@ -826,6 +859,122 @@ module Opacity_atom
 
       return
    end function profile_art
+   function profile_art_mono(line,id,icell,lam)
+   use voigts, only : VoigtThomson
+      ! phi = Voigt / sqrt(pi) / vbroad(icell)
+!TO DO: move omegav outside for each atom
+      integer, intent(in)                    :: id, icell
+      type (AtomicLine), intent(in)          :: line
+      real(kind=dp), intent(in)              :: lam
+      integer 											:: Nvspace
+      real(kind=dp)                          :: norm, vth
+      integer                                :: Nred, Nblue, i, j, nv
+      real(kind=dp)                          :: u0, profile_art_mono(1), u1(1), u0sq
+
+   
+      i = line%i; j = line%j
+      Nred = line%Nr; Nblue = line%Nb
+      vth = vbroad(T(icell),line%Atom%weight, vturb(icell))
+
+      Nvspace = Nvel_points(id)
+
+      u0 = (lam - line%lambda0)/line%lambda0  * ( c_light/vth )
+
+      if (line%voigt) then
+         u1(1) = u0 - omegav(1,id)/vth
+         if (lnon_lte_loop) then!approximate for non-LTE
+            profile_art_mono = VoigtThomson(1,line%a(icell), u1(1),vth)
+            do nv=2, Nvspace
+               u1(1) = u0 - omegav(nv,id)/vth
+               profile_art_mono = profile_art_mono + VoigtThomson(1,line%a(icell), u1(1),vth)
+            enddo
+         else!accurate for images
+            profile_art_mono = Voigt(1, line%a(icell), u1(1))
+            do nv=2, Nvspace
+               u1(1) = u0 - omegav(nv,id)/vth
+               profile_art_mono = profile_art_mono + Voigt(1, line%a(icell), u1(1))
+            enddo
+         endif
+
+      else
+         u0sq = u0*u0
+         !Note: u1 = (u0 - omegav(nv)/vth)**2
+         u1(1) = u0sq + (omegav(1,id)/vth)*(omegav(1,id)/vth) - 2*u0 * omegav(1,id)/vth
+         profile_art_mono(1) = exp(-u1(1))
+         do nv=2, Nvspace
+            u1(1) = u0sq + (omegav(nv,id)/vth)*(omegav(nv,id)/vth) - 2*u0 * omegav(nv,id)/vth
+            profile_art_mono(1) = profile_art_mono(1) + exp(-u1(1))
+         enddo
+      endif
+
+      norm = Nvspace * vth * sqrtpi
+      profile_art_mono = profile_art_mono / norm
+
+      return
+   end function profile_art_mono
+   subroutine calc_omegav (id,icell,iray,lsubstract_avg,x,y,z,x1,y1,z1,u,v,w,l_void_before,l_contrib)
+      integer, intent(in)                    :: id, icell,iray
+      logical, intent(in)                    :: lsubstract_avg
+      real(kind=dp), intent(in)              :: x,y,z,u,v,w,& !positions and angles used to project
+                                             x1,y1,z1, &      ! velocity field and magnetic field
+                                             l_void_before,l_contrib !physical length of the cell
+      integer 											:: Nvspace
+      real(kind=dp)                          :: v0, v1, delta_vol_phi, xphi, yphi, zphi, &
+                                                dv, omegav_mean, vth
+      integer                                :: nv, nat
+      type(AtomType), pointer                :: at
+
+      Nvspace = NvspaceMax
+      v0 = v_proj(icell,x,y,z,u,v,w)
+      Nvel_points(id) = Nvspace !hmmm tmp
+
+      if (lvoronoi) then
+         omegav(1,id) = v0
+         Nvspace = 1
+         omegav_mean = v0
+         if (lsubstract_avg) then!labs == .true.
+            omegav(1:Nvspace,id) = omegav(1:Nvspace,id) - omegav_mean
+            vlabs(iray,id) = omegav_mean
+         else
+            if (lnon_lte_loop) omegav(1:Nvspace,id) = omegav(1:Nvspace,id) - vlabs(iray,id)
+         endif
+         return
+      endif
+
+!TO DO
+      !common Nvspace for all atoms at the moment
+      vth = 0.0
+      do nat=1, n_atoms
+         at => atoms(nat)%p
+         vth = min(vth,vbroad(T(icell),at%weight, vturb(icell)))
+      enddo
+      at => null()
+
+
+      Omegav(:,id) = 0.0
+      omegav(1,id) = v0
+      v1 = v_proj(icell,x1,y1,z1,u,v,w)
+      dv = abs(v1-v0)
+      Nvspace = min(max(2,nint(dv/vth*20.)),NvspaceMax)
+      Nvel_points(id) = Nvspace !hmmmm tmp
+
+      do nv=2, Nvspace-1
+         delta_vol_phi = l_void_before + (real(nv,kind=dp))/(real(Nvspace,kind=dp)) * l_contrib
+         xphi=x+delta_vol_phi*u
+         yphi=y+delta_vol_phi*v
+         zphi=z+delta_vol_phi*w
+         omegav(nv,id) = v_proj(icell,xphi,yphi,zphi,u,v,w)
+      enddo
+      omegav(Nvspace,id) = v1
+      omegav_mean = sum(omegav(1:Nvspace,id))/real(Nvspace,kind=dp)
+
+      if (lsubstract_avg) then!labs == .true.
+         omegav(1:Nvspace,id) = omegav(1:Nvspace,id) - omegav_mean
+         vlabs(iray,id) = omegav_mean
+      else
+         if (lnon_lte_loop) omegav(1:Nvspace,id) = omegav(1:Nvspace,id) - vlabs(iray,id)
+      endif
+   end subroutine calc_omegav
 
    function profile_art_i(line,id,icell,iray,lsubstract_avg,N,lambda, x,y,z,x1,y1,z1,u,v,w,l_void_before,l_contrib)
       integer, intent(in)                    :: icell, N, id, iray

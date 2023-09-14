@@ -11,7 +11,10 @@ module optical_depth
   use radiation_field, only : save_radiation_field
   use density
   use stars, only : intersect_stars, star_rad
-  use opacity_atom, only : opacity_atom_bb_loc, contopac_atom_loc, Itot, psi, contopac_atom, lineopac_atom
+  use gas_contopac, only : background_continua_lambda
+  use opacity_atom, only : opacity_atom_bb_loc, contopac_atom_loc, Itot, psi, &
+   contopac_atom, lineopac_atom, n_lambda_cont, tab_lambda_cont, chi_cont, eta_cont, opacity_atom_bf_loc, &
+   calc_omegav
 
   implicit none
 
@@ -1220,15 +1223,15 @@ end subroutine optical_length_tot_mol
       logical, intent(in) :: labs
       integer, intent(in) :: N
       real(kind=dp) :: tau_limit = 1d3
-      real(kind=dp), dimension(N), intent(in), target :: lambda
+      real(kind=dp), dimension(N), intent(in):: lambda
       real(kind=dp) :: x0, y0, z0, x1, y1, z1, l, l_contrib, l_void_before, Q, P(4)
       real(kind=dp), dimension(N) :: tau, dtau, coronal_irrad
-      real(kind=dp), dimension(N), target :: Snu, chi
-      integer :: nbr_cell, icell, next_cell, previous_cell, icell_star, i_star, la, icell_prev
+      real(kind=dp), dimension(N):: Snu, chi
+      real(kind=dp), dimension(n_lambda_cont):: Snuc, chic
+      integer :: nbr_cell, icell, next_cell, previous_cell, icell_star, i_star, icell_prev
       logical :: lcellule_non_vide, lsubtract_avg, lintersect_stars
+      integer :: la, i0
       logical, dimension(N) :: lopt_thin_lam
-      real(kind=dp), dimension(:), pointer :: xe, xc, xl
-      integer, dimension(:), pointer :: index
 
       x1=x;y1=y;z1=z
       x0=x;y0=y;z0=z
@@ -1294,51 +1297,35 @@ end subroutine optical_length_tot_mol
          !count opacity only if the cell is filled, else go to next cell
          if (lcellule_non_vide) then
             lsubtract_avg = ((nbr_cell == 1).and.labs)
-            ! opacities in m^-1, l_contrib in au
+            ! opacities in m^-1, l_contrib in au !
 
-            !computes opacities and update tau, Snu and, I,
-            !only if a tau_limit has not been reached yet.
-            !After, exp(-tau) goes to 0 and I is never updated anymore.
-            !Assuming Snu * exp(-tau) is 0 when tau > tau_limit (finite Snu).
-            ! tau = 1d4
-            ! tau(300) = 0
-            where (tau < tau_limit) 
-               lopt_thin_lam = .true.
-            elsewhere
-               lopt_thin_lam = .false.
-            endwhere
+            !-> set up background opacities on a small grid for interpolation.
+            if (llimit_mem) then
+               call background_continua_lambda(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
+               call opacity_atom_bf_loc(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
+            else
+               chic = chi_cont(:,icell)
+               snuc = eta_cont(:,icell)
+            endif
+            i0 = 2 !used in the interpolation of continuous opacities.
 
-            !-> not working ??
-            ! index = pack([(la,la=1,N)],lopt_thin_lam)
-            ! xe => Snu([(index(la),la=1,size(index))])
+            !-> computes the velocity shift samples for each atom in that direction
+            call calc_omegav(id,icell,iray,lsubtract_avg,x0,y0,z0,x1,y1,z1,u,v,w,l_void_before,l_contrib) !used in lineopac.
 
-            ! Snu = 0.0
-            ! associate(xl => pack(lambda,lopt_thin_lam),xe=>pack(snu,lopt_thin_lam),index => pack([(la,la=1,N)],lopt_thin_lam))
+            freq_loop : do la=1, N
+               lopt_thin_lam(la) = .true.
+               if (tau(la) > tau_limit) then
+                  lopt_thin_lam(la) = .false.
+                  cycle freq_loop
+               endif
+               !Index of i0 for interpolation of ordered arrays
+               call contopac_atom(icell,i0,la,chic,snuc,chi(la),Snu(la))
+               !TODO : omegav(1:Nvspace,Natom) should be computed beforehand (same for all freq)
+               call lineopac_atom(id,icell,iray,lsubtract_avg,la,chi(la),Snu(la))
 
-            ! write(*,*) "xl=",xl
-            ! xe(:) = 3.0
-            ! Snu([(index(la),la=1,size(xl))]) = xe(:)
-            ! endassociate
-            ! write(*,*) "Snu=",snu
-            ! write(*,*) locate(snu, 3d0)
-
-            ! stop
-
-            !computes opacities for a smaller array
-            !broken if lopt_thin_lam is all .false.. The return below prevents from that happenning?
-            associate (xl => pack(lambda, lopt_thin_lam), xe => pack(Snu, lopt_thin_lam),  xc => pack(chi, lopt_thin_lam), &
-               index => pack([(la,la=1,N)],lopt_thin_lam))
-            !-> always evaluated on a small (cont)frequency grid and then interpolated at lambda.
-
-               call contopac_atom(icell,xl,xc,xe)
-               call lineopac_atom(id,icell,iray,x0,y0,z0,x1,y1,z1,u,v,w,&
-                  l_void_before,l_contrib,lsubtract_avg,xl,xc,xe)
-
-            ! dtau(:) = l_contrib * chi(:) * AU_to_m !au * m^-1 * au_to_m
-               dtau([(index(la),la=1,size(xl))]) = l_contrib * xc(:) * AU_to_m
-               Snu([(index(la),la=1,size(xl))]) = xe(:) / xc(:)
-               chi([(index(la),la=1,size(xl))]) = xc(:)
-            endassociate
+               dtau(la) = l_contrib * chi(la) * AU_to_m
+               Snu(la) = Snu(la) / chi(la)
+            enddo freq_loop
 
             !even with tau_limit we always evaluate that.
             !the first cell has tau=0 in the non-LTE loop.
