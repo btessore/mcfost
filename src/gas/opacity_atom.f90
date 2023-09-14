@@ -196,12 +196,15 @@ module Opacity_atom
 
       do nat=1, n_atoms
          atm => atoms(nat)%p
+         mem_loc = mem_loc + sizeof(atm%vth)
          do kr=1,atm%nline
                if (.not.atm%lines(kr)%lcontrib) cycle
                if (atm%lines(kr)%Voigt) then
                !-> do not allocate if using thomson and humlicek profiles
                   ! allocate(atm%lines(kr)%v(atm%lines(kr)%Nlambda),atm%lines(kr)%phi(atm%lines(kr)%Nlambda,n_cells))
                   allocate(atm%lines(kr)%a(n_cells)); atm%lines(kr)%a(:) = 0.0_dp
+                  allocate(atm%lines(kr)%b(n_cells),atm%lines(kr)%c(n_cells))
+                  mem_loc = mem_loc + 2 * sizeof(atm%lines(kr)%b)
                   mem_loc = mem_loc + sizeof(atm%lines(kr)%a)!+sizeof(atm%lines(kr)%phi)+sizeof(atm%lines(kr)%v)
                endif
          enddo
@@ -221,6 +224,14 @@ module Opacity_atom
                   ! atm%lines(kr)%phi(:,icell) = Voigt(atm%lines(kr)%Nlambda, &
                   !                                  atm%lines(kr)%a(icell), &
                   !                                  atm%lines(kr)%v(:)) / (vth * sqrtpi)
+                  !f Thomson
+                  atm%lines(kr)%b(icell) = (vth**5. + 2.69269*vth**4. * (atm%lines(kr)%a(icell)*vth) + 2.42843*vth**3. * (atm%lines(kr)%a(icell)*vth)**2. + &
+                     4.47163*vth**2. *(atm%lines(kr)%a(icell)*vth)**3. + 0.07842*vth*(atm%lines(kr)%a(icell)*vth)**4. + (atm%lines(kr)%a(icell)*vth)**5.)**(0.2)
+
+                  !eta Thomson
+                  atm%lines(kr)%c(icell) = 1.36603*(vth*atm%lines(kr)%a(icell)/atm%lines(kr)%b(icell)) - &
+                     0.47719*(vth*atm%lines(kr)%a(icell)/atm%lines(kr)%b(icell))**2 + &
+                     0.11116*(vth*atm%lines(kr)%a(icell)/atm%lines(kr)%b(icell))**3
                endif
             enddo
          enddo
@@ -299,6 +310,7 @@ module Opacity_atom
          do kr=1,atm%nline
             if (allocated( atm%lines(kr)%a)) deallocate(atm%lines(kr)%a )
             if (allocated( atm%lines(kr)%v)) deallocate(atm%lines(kr)%v,atm%lines(kr)%phi)
+            if (allocated( atm%lines(kr)%b)) deallocate(atm%lines(kr)%b,atm%lines(kr)%c)
          enddo
 
          do kr = 1, atm%Ncont
@@ -567,11 +579,13 @@ module Opacity_atom
       lam = tab_lambda_nm(ilam)
 
    !-> this should be outside + need common gauss prof outside
-      dv = 0.0_dp
-      if (lnon_lte_loop.and..not.iterate) then !not iterate but non-LTE
-         !the mean of omegav is essentially the same as vloc (2points).
-         dv = sum(omegav(1:Nvel_points(id),id))/real(Nvel_points(id)) - vlabs(iray,id)
-      endif
+      ! dv = 0.0_dp
+      ! if (lnon_lte_loop.and..not.iterate) then !not iterate but non-LTE
+      !    !the mean of omegav is essentially the same as vloc (2points).
+      !    ! dv = sum(omegav(1:Nvel_points(id),id))/real(Nvel_points(id))
+      !    dv = 0.5*(omegav(1,id)+omegav(Nvel_points(id),id))
+      !   ! the - vlabs is already accounted for here.
+      ! endif
 
       !loop over lines at that frequency
       do kr = 1, art_lines(ilam)%Ntrans
@@ -582,16 +596,16 @@ module Opacity_atom
          i = line%i; j = line%j
 
          !move outside ?
-         if ((line%atom%n(i,icell) - line%atom%n(j,icell)*line%gij) <= 0.0_dp) cycle
+         ! if ((line%atom%n(i,icell) - line%atom%n(j,icell)*line%gij) <= 0.0_dp) cycle
 
 
-         if (lnon_lte_loop) then
-            if (abs(dv)>1.0*vbroad(T(icell),line%Atom%weight, vturb(icell))) then
-               Nred = line%Nover_sup
-               Nblue = line%Nover_inf
-               Nlam = Nred - Nblue + 1
-            endif
-         endif
+         ! if (lnon_lte_loop) then
+         !    if (abs(dv)>1.0*vbroad(T(icell),line%Atom%weight, vturb(icell))) then
+         !       Nred = line%Nover_sup
+         !       Nblue = line%Nover_inf
+         !       Nlam = Nred - Nblue + 1
+         !    endif
+         ! endif
 
          phi0 = profile_art_mono(line,id,icell,lam)
 
@@ -860,7 +874,7 @@ module Opacity_atom
       return
    end function profile_art
    function profile_art_mono(line,id,icell,lam)
-   use voigts, only : VoigtThomson
+   use voigts, only : VoigtThomson_b
       ! phi = Voigt / sqrt(pi) / vbroad(icell)
 !TO DO: move omegav outside for each atom
       integer, intent(in)                    :: id, icell
@@ -873,8 +887,8 @@ module Opacity_atom
 
    
       i = line%i; j = line%j
+      vth = line%atom%vth(icell)
       Nred = line%Nr; Nblue = line%Nb
-      vth = vbroad(T(icell),line%Atom%weight, vturb(icell))
 
       Nvspace = Nvel_points(id)
 
@@ -883,10 +897,10 @@ module Opacity_atom
       if (line%voigt) then
          u1(1) = u0 - omegav(1,id)/vth
          if (lnon_lte_loop) then!approximate for non-LTE
-            profile_art_mono = VoigtThomson(1,line%a(icell), u1(1),vth)
+            profile_art_mono(1) = VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
             do nv=2, Nvspace
                u1(1) = u0 - omegav(nv,id)/vth
-               profile_art_mono = profile_art_mono + VoigtThomson(1,line%a(icell), u1(1),vth)
+               profile_art_mono(1) = profile_art_mono(1) + VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
             enddo
          else!accurate for images
             profile_art_mono = Voigt(1, line%a(icell), u1(1))
@@ -943,7 +957,7 @@ module Opacity_atom
 
 !TO DO
       !common Nvspace for all atoms at the moment
-      vth = 0.0
+      vth = 1d50
       do nat=1, n_atoms
          at => atoms(nat)%p
          vth = min(vth,vbroad(T(icell),at%weight, vturb(icell)))

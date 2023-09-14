@@ -44,7 +44,7 @@ module atom_type
       real :: qwing
       real(kind=dp), allocatable, dimension(:)  :: Rij, Rji, Cij, Cji 
       real(kind=dp), dimension(4) :: cvdWaals
-      real(kind=dp), dimension(:), allocatable :: a
+      real(kind=dp), dimension(:), allocatable :: a, b, c
       real(kind=dp), dimension(:,:,:,:,:), allocatable :: map !2d flux in the line
       ! real(kind=dp), dimension(:), allocatable :: u, pvoigt_eta, aeff, r, r1 !thomson approx. of Voigt.
       real(kind=dp), allocatable :: v(:), phi(:,:)
@@ -79,7 +79,7 @@ module atom_type
       ! BY CONVENTION, stage=0 for neutrals, 1 for singly ionised
       integer, allocatable, dimension(:)  :: stage, Lorbit
       real(kind=dp) :: Rydberg
-      real(kind=dp), allocatable, dimension(:) :: g, E
+      real(kind=dp), allocatable, dimension(:) :: g, E, vth
       real, allocatable, dimension(:) :: qS, qJ
       ! atom can be passive but NLTEpops true. This is the case of
       ! populations read from previous run

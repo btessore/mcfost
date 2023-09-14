@@ -95,6 +95,18 @@ module voigts
         return
     end function VoigtThomson
 
+    function VoigtThomson_b(a, b, c, v, vbroad)
+        real(kind=dp), intent(in) :: a, b, c, vbroad, v
+        real(kind=dp) :: VoigtThomson_b
+
+
+        !because Thomson is in units of 1/vbroad/sqrtpi already
+        VoigtThomson_b = c * ( vbroad * b / pi / sqrtpi / ((vbroad*v)**2 + b**2) ) + &
+            (1.0_dp - c) * exp(-(v*vbroad/b)**2) * vbroad / b
+    
+        return
+    end function VoigtThomson_b
+
    function max_voigt_profile(vth,a)
    !Evaluate the maximum of the voigt function, using the Thomson approximation.
       real(kind=dp) :: max_voigt_profile

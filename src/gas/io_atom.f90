@@ -123,6 +123,10 @@ module io_atom
       determined(:) = .false.
       parse_labs(:) = .false.
       atom%vth_char = vbroad(minval(T,mask=T>0.0), atom%weight, minval(vturb,mask=T>0.0)) !m/s
+      allocate(atom%vth(n_cells))
+      do i=1,n_cells
+         if (T(i)>0.0) atom%vth(i) = vbroad(T(i),atom%weight,vturb(i))
+      enddo
 
       !Start reading energy levels
       do i=1,atom%Nlevel
