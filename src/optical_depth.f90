@@ -1298,6 +1298,9 @@ end subroutine optical_length_tot_mol
          if (lcellule_non_vide) then
             lsubtract_avg = ((nbr_cell == 1).and.labs)
             ! opacities in m^-1, l_contrib in au !
+            dtau = 0.0
+            chi = 0.0
+            Snu = 0.0
 
             !-> set up background opacities on a small grid for interpolation.
             if (llimit_mem) then
@@ -1308,10 +1311,10 @@ end subroutine optical_length_tot_mol
                snuc = eta_cont(:,icell)
             endif
             i0 = 2 !used in the interpolation of continuous opacities.
-
+part 1 :
             !-> computes the velocity shift samples for each atom in that direction
             call calc_omegav(id,icell,iray,lsubtract_avg,x0,y0,z0,x1,y1,z1,u,v,w,l_void_before,l_contrib) !used in lineopac.
-
+part 2 :  njAjihc_fourpi, niBij_njBjiHc_fourpi and vel / vth 
             freq_loop : do la=1, N
                lopt_thin_lam(la) = .true.
                if (tau(la) > tau_limit) then
@@ -1320,7 +1323,7 @@ end subroutine optical_length_tot_mol
                endif
                !Index of i0 for interpolation of ordered arrays
                call contopac_atom(icell,i0,la,chic,snuc,chi(la),Snu(la))
-               !TODO : omegav(1:Nvspace,Natom) should be computed beforehand (same for all freq)
+!remove everyhton here that does not need to be recomputed lambda after lambda
                call lineopac_atom(id,icell,iray,lsubtract_avg,la,chi(la),Snu(la))
 
                dtau(la) = l_contrib * chi(la) * AU_to_m
@@ -1337,15 +1340,10 @@ end subroutine optical_length_tot_mol
                ds(iray,id) = l_contrib * AU_to_m
             endif
 
-
-            where (lopt_thin_lam)
-               Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * (1.0_dp - exp(-dtau)) * Snu
-               tau(:) = tau(:) + dtau(:) !for next cell
-            endwhere
-            ! Snu = Snu / chi
-
-            ! Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * (1.0_dp - exp(-dtau)) * Snu
-            ! tau(:) = tau(:) + dtau(:) !for next cell
+            ! where (lopt_thin_lam)
+            Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * (1.0_dp - exp(-dtau)) * Snu
+            tau(:) = tau(:) + dtau(:) !for next cell
+            ! endwhere
             if (all(.not.lopt_thin_lam)) return
 
          end if  ! lcellule_non_vide

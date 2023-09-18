@@ -421,6 +421,7 @@ module Opacity_atom
             chi = (1.0_dp - w) * chic(lac-1)  + w * chic(lac)
             snu = (1.0_dp - w) * snuc(lac-1)  + w * snuc(lac)
             i0 = lac
+            return
             exit loop_i
          endif
       enddo loop_i
@@ -607,13 +608,17 @@ module Opacity_atom
          !    endif
          ! endif
 
-         phi0 = profile_art_mono(line,id,icell,lam)
+         phi0 = 1.0/sqrtpi/line%atom%vth(icell)!profile_art_mono(line,id,icell,lam)
+! TO DO: store hc_fourPI * line%Bij * (line%atom%n(i,icell) - line%gij*line%atom%n(j,icell))
+! and hc_fourPI * line%Aji * line%atom%n(j,icell) before the loop over frequency
+         ! chi = chi + &
+         !    hc_fourPI * line%Bij * phi0(1) * (line%atom%n(i,icell) - line%gij*line%atom%n(j,icell))
 
-         chi = chi + &
-            hc_fourPI * line%Bij * phi0(1) * (line%atom%n(i,icell) - line%gij*line%atom%n(j,icell))
+         ! Snu = Snu + &
+         !    hc_fourPI * line%Aji * phi0(1) * line%atom%n(j,icell)
+         chi = chi + phi0(1) * line%atom%n(i,icell)
 
-         Snu = Snu + &
-            hc_fourPI * line%Aji * phi0(1) * line%atom%n(j,icell)
+         Snu = Snu + phi0(1) * line%atom%n(j,icell)
 
 
          if ((iterate.and.line%atom%active)) then
@@ -896,19 +901,19 @@ module Opacity_atom
 
       if (line%voigt) then
          u1(1) = u0 - omegav(1,id)/vth
-         ! if (lnon_lte_loop) then!approximate for non-LTE
-         !    profile_art_mono(1) = VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
-         !    do nv=2, Nvspace
-         !       u1(1) = u0 - omegav(nv,id)/vth
-         !       profile_art_mono(1) = profile_art_mono(1) + VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
-         !    enddo
-         ! else!accurate for images
+         if (lnon_lte_loop) then!approximate for non-LTE
+            profile_art_mono(1) = VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
+            do nv=2, Nvspace
+               u1(1) = u0 - omegav(nv,id)/vth
+               profile_art_mono(1) = profile_art_mono(1) + VoigtThomson_b(line%a(icell),line%b(icell),line%c(icell), u1(1),vth)
+            enddo
+         else!accurate for images
             profile_art_mono = Voigt(1, line%a(icell), u1(1))
             do nv=2, Nvspace
                u1(1) = u0 - omegav(nv,id)/vth
                profile_art_mono = profile_art_mono + Voigt(1, line%a(icell), u1(1))
             enddo
-         ! endif
+         endif
 
       else
          u0sq = u0*u0
