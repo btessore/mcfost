@@ -172,6 +172,22 @@ module Opacity_atom
 
       return
    endsubroutine setup_activelines_list
+   subroutine calc_line_part2(id,icell)
+      integer, intent(in) :: id, icell
+      integer :: n, kr, i, j
+      type (AtomType), pointer :: at
+
+      do n=1, n_atoms
+         at => Atoms(n)%p
+         do kr=1, at%Nline
+            i = at%lines(kr)%i; j = at%lines(kr)%j
+            at%lines(kr)%eta0(id) = hc_fourPI * at%n(j,icell) * at%lines(kr)%Aji
+            at%lines(kr)%chi0(id) = hc_fourPI * (at%n(i,icell) - at%lines(kr)%gij * at%n(j,icell))
+         enddo
+      enddo 
+
+      return
+   endsubroutine calc_line_part2
 
    !could be parralel
    subroutine alloc_atom_opac(N,x,limage)
@@ -217,6 +233,7 @@ module Opacity_atom
                   mem_loc = mem_loc + 2 * sizeof(atm%lines(kr)%b)
                   mem_loc = mem_loc + sizeof(atm%lines(kr)%a)!+sizeof(atm%lines(kr)%phi)+sizeof(atm%lines(kr)%v)
                endif
+               allocate(atm%lines(kr)%eta0(nb_proc),atm%lines(kr)%chi0(nb_proc))
          enddo
 
          do icell=1, n_cells
@@ -322,6 +339,7 @@ module Opacity_atom
             if (allocated( atm%lines(kr)%v)) deallocate(atm%lines(kr)%v,atm%lines(kr)%phi)
             if (allocated( atm%lines(kr)%b)) deallocate(atm%lines(kr)%b,atm%lines(kr)%c)
          enddo
+         deallocate(atm%lines(kr)%eta0,atm%lines(kr)%chi0)
 
          do kr = 1, atm%Ncont
             if (allocated(atm%continua(kr)%twohnu3_c2)) then
@@ -639,7 +657,7 @@ module Opacity_atom
          Nlam = line%Nlambda
          i = line%i; j = line%j
 
-         !move outside ?
+         !move outside ? but then list of lines must be updated after the convergence test  ?
          ! if ((line%atom%n(i,icell) - line%atom%n(j,icell)*line%gij) <= 0.0_dp) cycle
 
 
@@ -651,17 +669,14 @@ module Opacity_atom
          !    endif
          ! endif
 
-         phi0 = 1.0/sqrtpi/line%atom%vth(icell)!profile_art_mono(line,id,icell,lam)
-! TO DO: store hc_fourPI * line%Bij * (line%atom%n(i,icell) - line%gij*line%atom%n(j,icell))
-! and hc_fourPI * line%Aji * line%atom%n(j,icell) before the loop over frequency
-         ! chi = chi + &
-         !    hc_fourPI * line%Bij * phi0(1) * (line%atom%n(i,icell) - line%gij*line%atom%n(j,icell))
+         ! phi0 = 1.0/sqrtpi/line%atom%vth(icell)
+         ! chi = chi + phi0(1) * line%atom%n(i,icell)
+         ! Snu = Snu + phi0(1) * line%atom%n(j,icell)
+         phi0 = profile_art_mono(line,id,icell,lam)
 
-         ! Snu = Snu + &
-         !    hc_fourPI * line%Aji * phi0(1) * line%atom%n(j,icell)
-         chi = chi + phi0(1) * line%atom%n(i,icell)
+         chi = chi + line%chi0(id) * phi0(1)
 
-         Snu = Snu + phi0(1) * line%atom%n(j,icell)
+         Snu = Snu + line%eta0(id) * phi0(1)
 
 
          if ((iterate.and.line%atom%active)) then

@@ -44,7 +44,7 @@ module atom_type
       real :: qwing
       real(kind=dp), allocatable, dimension(:)  :: Rij, Rji, Cij, Cji 
       real(kind=dp), dimension(4) :: cvdWaals
-      real(kind=dp), dimension(:), allocatable :: a, b, c
+      real(kind=dp), dimension(:), allocatable :: a, b, c, eta0, chi0
       real(kind=dp), dimension(:,:,:,:,:), allocatable :: map !2d flux in the line
       ! real(kind=dp), dimension(:), allocatable :: u, pvoigt_eta, aeff, r, r1 !thomson approx. of Voigt.
       real(kind=dp), allocatable :: v(:), phi(:,:)

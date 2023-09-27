@@ -14,7 +14,7 @@ module optical_depth
   use gas_contopac, only : background_continua_lambda
   use opacity_atom, only : opacity_atom_bb_loc, contopac_atom_loc, Itot, psi, &
    contopac_atom, lineopac_atom, n_lambda_cont, tab_lambda_cont, chi_cont, eta_cont, opacity_atom_bf_loc, &
-   calc_omegav
+   calc_omegav, calc_line_part2
 
   implicit none
 
@@ -1305,10 +1305,11 @@ end subroutine optical_length_tot_mol
                snuc = eta_cont(:,icell)
             endif
             i0 = 2 !used in the interpolation of continuous opacities.
-part 1 :
+!part 1 :
             !-> computes the velocity shift samples for each atom in that direction
             call calc_omegav(id,icell,iray,lsubtract_avg,x0,y0,z0,x1,y1,z1,u,v,w,l_void_before,l_contrib) !used in lineopac.
-part 2 :  njAjihc_fourpi, niBij_njBjiHc_fourpi and vel / vth 
+!part 2 :  njAjihc_fourpi, niBij_njBjiHc_fourpi and vel / vth 
+            call calc_line_part2(id,icell)
             freq_loop : do la=1, N
                lopt_thin_lam(la) = .true.
                if (tau(la) > tau_limit) then
