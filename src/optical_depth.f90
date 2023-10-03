@@ -1297,13 +1297,15 @@ end subroutine optical_length_tot_mol
             Snu = 0.0
 
             !-> set up background opacities on a small grid for interpolation.
-            if (llimit_mem) then
-               call background_continua_lambda(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
-               call opacity_atom_bf_loc(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
-            else
-               chic = chi_cont(:,icell)
-               snuc = eta_cont(:,icell)
-            endif
+            write(*,*) "FIX LLIMIT_MEM IN TAU_LIMIT_MONO AFTER MERGING THE NEW CONTINUUM LIMIT_MEM < 2 OPTIONS"
+            stop
+            ! if (llimit_mem) then
+            !    call background_continua_lambda(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
+            !    call opacity_atom_bf_loc(icell, n_lambda_cont, tab_lambda_cont, chic, Snuc)
+            ! else
+            !    chic = chi_cont(:,icell)
+            !    snuc = eta_cont(:,icell)
+            ! endif
             i0 = 2 !used in the interpolation of continuous opacities.
 !part 1 :
             !-> computes the velocity shift samples for each atom in that direction
