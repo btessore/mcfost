@@ -1224,7 +1224,9 @@ end subroutine optical_length_tot_mol
       real(kind=dp), dimension(N) :: tau, dtau, coronal_irrad
       real(kind=dp), dimension(N):: Snu, chi
       real(kind=dp), dimension(n_lambda_cont):: Snuc, chic
-      integer :: nbr_cell, icell, next_cell, previous_cell, icell_star, i_star, icell_prev
+      integer :: nbr_cell, next_cell, previous_cell, icell_star, i_star, icell_prev
+      integer, target :: icell
+      integer, pointer :: p_icell
       logical :: lcellule_non_vide, lsubtract_avg, lintersect_stars
       integer :: la, i0
       logical, dimension(N) :: lopt_thin_lam
@@ -1239,6 +1241,9 @@ end subroutine optical_length_tot_mol
 
       Itot(:,iray,id) = 0.0_dp
 
+      p_icell => icell_ref
+      if (lvariable_dust) p_icell => icell
+
       ! Will the ray intersect a star
       call intersect_stars(x,y,z, u,v,w, lintersect_stars, i_star, icell_star)
       ! Boucle infinie sur les cellules (we go over the grid.)
@@ -1248,11 +1253,6 @@ end subroutine optical_length_tot_mol
          x0=x1 ; y0=y1 ; z0=z1
 
          lcellule_non_vide = (icell <= n_cells)
-         ! if (icell <= n_cells) then
-         !    lcellule_non_vide=.true.
-         ! else
-         !    lcellule_non_vide=.false.
-         ! endif
 
          ! Test sortie ! "The ray has reach the end of the grid"
          if (test_exit_grid(icell, x0, y0, z0)) return
@@ -1264,23 +1264,16 @@ end subroutine optical_length_tot_mol
                return
             end if
          endif
-         !With the Voronoi grid, somme cells can have a negative index
-         !therefore we need to test_exit_grid before using icompute_atom_rt
-         if (icell <= n_cells) then
-            lcellule_non_vide = (icompute_atomRT(icell) > 0)
-            if (icompute_atomRT(icell) < 0) then
-               if (icompute_atomRT(icell) == -1) then
-                  !If the optically thick region (dark zone) has a temperature
-                  !add a black body emission and leave.
-                  if (T(icell) > 0.0_dp) Itot(:,iray,id) = Itot(:,iray,id) + &
-                                    exp(-tau) * Bpnu(N,lambda,T(icell))
-                  return
-               else
-                  !Does not return but cell is empty (lcellule_non_vide is .false.)
-                  coronal_irrad = linear_1D_sorted(atmos_1d%Ncorona,atmos_1d%x_coro(:), &
+
+         !Special handling of coronal irradiation from "above".
+         !mainly for 1d stellar atmosphere
+         if (lcellule_non_vide) then
+            if (icompute_atomRT(icell) == -2) then
+               !Does not return but cell is empty (lcellule_non_vide is .false.)
+               coronal_irrad = linear_1D_sorted(atmos_1d%Ncorona,atmos_1d%x_coro(:), &
                                                    atmos_1d%I_coro(:,1),N,lambda)
-                  Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * coronal_irrad
-               endif
+               Itot(:,iray,id) = Itot(:,iray,id) + exp(-tau) * coronal_irrad
+               lcellule_non_vide = .false.
             endif
          endif
 
@@ -1298,6 +1291,7 @@ end subroutine optical_length_tot_mol
             chi = 0.0
             Snu = 0.0
 
+            if (icompute_atomRT(icell)>0) then
             !-> set up background opacities on a small grid for interpolation.
             write(*,*) "FIX LLIMIT_MEM IN TAU_LIMIT_MONO AFTER MERGING THE NEW CONTINUUM LIMIT_MEM < 2 OPTIONS"
             stop
@@ -1308,26 +1302,31 @@ end subroutine optical_length_tot_mol
             !    chic = chi_cont(:,icell)
             !    snuc = eta_cont(:,icell)
             ! endif
-            i0 = 2 !used in the interpolation of continuous opacities.
+               i0 = 2 !used in the interpolation of continuous opacities.
 !part 1 :
             !-> computes the velocity shift samples for each atom in that direction
-            call calc_omegav(id,icell,iray,lsubtract_avg,x0,y0,z0,x1,y1,z1,u,v,w,l_void_before,l_contrib) !used in lineopac.
+               call calc_omegav(id,icell,iray,lsubtract_avg,x0,y0,z0,x1,y1,z1,u,v,w,l_void_before,l_contrib) !used in lineopac.
 !part 2 :  njAjihc_fourpi, niBij_njBjiHc_fourpi and vel / vth 
-            call calc_line_part2(id,icell)
-            freq_loop : do la=1, N
-               lopt_thin_lam(la) = .true.
-               if (tau(la) > tau_limit) then
-                  lopt_thin_lam(la) = .false.
-                  cycle freq_loop
-               endif
+               call calc_line_part2(id,icell)
+               freq_loop : do la=1, N
+                  lopt_thin_lam(la) = .true.
+                  if (tau(la) > tau_limit) then
+                     lopt_thin_lam(la) = .false.
+                     cycle freq_loop
+                  endif
                !Index of i0 for interpolation of ordered arrays
-               call contopac_atom(icell,i0,la,chic,snuc,chi(la),Snu(la))
+                  call contopac_atom(icell,i0,la,chic,snuc,chi(la),Snu(la))
 !remove everyhton here that does not need to be recomputed lambda after lambda
-               call lineopac_atom(id,icell,iray,lsubtract_avg,la,chi(la),Snu(la))
+                  call lineopac_atom(id,icell,iray,lsubtract_avg,la,chi(la),Snu(la))
 
-               dtau(la) = l_contrib * chi(la) * AU_to_m
-               Snu(la) = Snu(la) / chi(la)
-            enddo freq_loop
+                  dtau(la) = l_contrib * chi(la) * AU_to_m
+                  Snu(la) = Snu(la) / chi(la)
+               enddo freq_loop
+            endif
+            if (ldust_atom) then
+               chi = chi + kappa_abs_LTE(p_icell,:) * kappa_factor(icell) * m_to_AU ! [m^-1]
+               Snu = Snu + emissivite_dust(:,icell) ! [W m^-3 Hz^-1 sr^-1]
+            endif
 
             !even with tau_limit we always evaluate that.
             !the first cell has tau=0 in the non-LTE loop.
@@ -1375,7 +1374,9 @@ subroutine physical_length_atom(id,icell_in,x,y,z,u,v,w,N,lambda,tau_threshold,f
   real(kind=dp), dimension(N) :: tau, dtau, chi, eta, tau_previous
   real(kind=dp) :: tau_max, facteur_tau
 
-  integer :: nbr_cell, next_cell, previous_cell, icell, icell_star, i_star
+  integer :: nbr_cell, next_cell, previous_cell, icell_star, i_star
+  integer, target :: icell
+  integer, pointer :: p_icell
 
   logical :: lcellule_non_vide, lstop(N), lintersect_stars
   logical, parameter :: lsubtract_avg = .false. !images and vlabs = 0, so iray and labs not needed!
@@ -1394,6 +1395,9 @@ subroutine physical_length_atom(id,icell_in,x,y,z,u,v,w,N,lambda,tau_threshold,f
    !flag_sortie = .true. not useful. By default, (x,y,z) are 0 if we don't reach the surface.
    x = 0.0; y = 0.0; z = 0.0
 
+   p_icell => icell_ref
+   if (lvariable_dust) p_icell => icell
+
    ! Will the ray intersect a star
    call intersect_stars(x0,y0,z0, u,v,w, lintersect_stars, i_star, icell_star)
    ! Boucle infinie sur les cellules (we go over the grid.)
@@ -1405,19 +1409,16 @@ subroutine physical_length_atom(id,icell_in,x,y,z,u,v,w,N,lambda,tau_threshold,f
       lcellule_non_vide = (icell <= n_cells)
 
       ! Test sortie ! "The ray has reach the end of the grid"
-      if (test_exit_grid(icell, x0, y0, z0)) then
-         return
-      endif
+      if (test_exit_grid(icell, x0, y0, z0)) return
 
       if (lintersect_stars) then !"will interesct"
          if (icell == icell_star) return
       endif
 
-      if (icell <= n_cells) then
-         lcellule_non_vide = (icompute_atomRT(icell) > 0)
-         if (icompute_atomRT(icell) < 0) return
+      if (lcellule_non_vide) then
+         if (icompute_atomRT(icell) == -2) lcellule_non_vide = .false.
       endif
-
+!add dust + check lcellule_non_vide
       nbr_cell = nbr_cell + 1
 
       ! Calcul longeur de vol et profondeur optique dans la cellule
@@ -1427,9 +1428,15 @@ subroutine physical_length_atom(id,icell_in,x,y,z,u,v,w,N,lambda,tau_threshold,f
       !count opacity only if the cell is filled, else go to next cell
       if (lcellule_non_vide) then
 
-         call contopac_atom_loc(icell, N, lambda, chi, eta)
-         call opacity_atom_bb_loc(id,icell,1,x0,y0,z0,x1,y1,z1,u,v,w,&
-               l_void_before,l_contrib,lsubtract_avg,N,lambda,chi,eta)
+         chi(:) = 1d-300; eta(:) = 0.0_dp
+         if (icompute_atomRT(icell) > 0) then
+            call contopac_atom_loc(icell, N, lambda, chi, eta)
+            call opacity_atom_bb_loc(id,icell,1,x0,y0,z0,x1,y1,z1,u,v,w,&
+                  l_void_before,l_contrib,lsubtract_avg,N,lambda,chi,eta)
+         endif
+         if (ldust_atom) then
+            chi = chi + kappa_abs_LTE(p_icell,:) * kappa_factor(icell) * m_to_AU ! [m^-1]
+         endif
 
          dtau(:) = l_contrib * chi(:) * AU_to_m !au * m^-1 * au_to_m
          tau(:) = tau(:) + dtau(:) !for next cell
