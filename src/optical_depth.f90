@@ -1428,8 +1428,8 @@ subroutine physical_length_atom(id,icell_in,x,y,z,u,v,w,N,lambda,tau_threshold,f
       !count opacity only if the cell is filled, else go to next cell
       if (lcellule_non_vide) then
 
-         chi(:) = 1d-300; eta(:) = 0.0_dp
-         if (icompute_atomRT(icell) > 0) then
+         chi = 0.0
+         if (icompute_atomRT(icell)>0) then
             call contopac_atom_loc(icell, N, lambda, chi, eta)
             call opacity_atom_bb_loc(id,icell,1,x0,y0,z0,x1,y1,z1,u,v,w,&
                   l_void_before,l_contrib,lsubtract_avg,N,lambda,chi,eta)
