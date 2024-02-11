@@ -66,13 +66,13 @@
   -10.0 10.0 40     	  vmin and vmax [km/s], number of velocity bins betwen 0 and vmax
 
 #Atoms settings / share some informations with molecules
- 1		number of atoms
- H_6.atom	all levels treated in details at the moment
- F		non-LTE ?
- 0		initial solution, 0 LTE, 1 from file
- 1000 101	vmax (km/s), n_points for ray-traced images and total flux
- T 1		images (T) or total flux (F) ? Number of lines for images
- 3 2		upper level -> lower level (Atomic model dependent)
+ 1		# number of atoms
+ H_6.atom	# all levels treated in details at the moment
+ F		# non-LTE ?
+ 0		# initial solution, 0 LTE, 1 from file
+ 1000 101	# vmax (km/s), n_points for ray-traced images and total flux
+ T 1		# images (T) or total flux (F) ? Number of lines for images
+ 3 2		# upper level -> lower level (Atomic model dependent)
 
 #Star properties
  1 Number of stars

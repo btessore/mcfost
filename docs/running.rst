@@ -111,3 +111,27 @@ which will compute the temperature, SED and molecular maps, followed by::
   $ mcfost <parameter_file> -img 1300
 
 which will compute a continuum image at 1.3mm.
+
+
+Atomic Line Calculations
+---------------------------
+
+A basic atomic line calculation is performed by using::
+
+  $ mcfost <parameter_file> -atom
+
+Similarly to the -mol option, it will computes the temperature (if dust is present), then the atomic levels populations in non-LTE mode and finally, emission line maps or high resolution flux (low resolution with the SED option).
+
+To calculate, for example, the hydrogen 3->2 transition, that is the Balmer H$\alpha$ line, for a 6-level hydrogen atom, the parameter file configuration is
+
+::
+
+  #Atoms settings / share some informations with molecules
+  1         # number of atoms
+  H_6.atom	# all levels treated in details at the moment
+  F         # non-LTE ?
+  0		      # initial solution, 0 LTE, 1 from file
+  1000 101	# vmax (km/s), n_points for ray-traced images and total flux
+  T 1		    # images (T) or total flux (F) ? Number of lines for images
+  3 2		    # upper level -> lower level (Atomic model dependent)
+This will compute the hydrogen line at LTE (non-LTE is False (F)), from -1000 km/s to 1000 km/s centered around the frequency of the transition, using 101 points.
