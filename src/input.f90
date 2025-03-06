@@ -41,7 +41,8 @@ subroutine read_molecules_names(imol)
   open(unit=1, file=filename, status="old")
 
   read(1,*) junk
-  read(1,'(a)') mol(imol)%name
+  read(1,'(a)') junk
+  mol(imol)%name = trim(adjustl(junk))
   close(unit=1)
 
   return
@@ -80,11 +81,12 @@ subroutine readmolecule(imol)
   open(unit=1, file=filename, status="old")
 
   read(1,*) junk
-  read(1,'(a)') mol(imol)%name
+  read(1,'(a)') junk
+  mol(imol)%name = trim(adjustl(junk))
 
   read(1,*) junk
   read(1,*) molecularWeight
-  masse_mol = masseH * molecularWeight
+  mol(imol)%molecularWeight = molecularWeight
 
   read(1,*) junk
   read(1,*) nLevels
@@ -94,7 +96,6 @@ subroutine readmolecule(imol)
   read(1,*) junk
   do i = 1, nLevels
      read(1,*) j, Level_energy(i), poids_stat_g(i) , j_qnb(i)
- !    read(1,*) j, Level_energy(i), poids_stat_g(i) !, buffer
      Level_energy(i) = Level_energy(i) / 8065.541  ! per cm to ev
   enddo
 
@@ -183,7 +184,7 @@ subroutine lect_Temperature()
   integer, dimension(5) :: naxes
   logical :: anynull, there_is_dust
 
-  !future: lgas_transfer. Dust could not always be present in the gas RT.  
+  !future: lgas_transfer. Dust could not always be present in the gas RT.
   if (lemission_atom) then
      there_is_dust = (maxval(densite_pouss) > 0_dp)
      if ( .not.there_is_dust ) then
@@ -726,7 +727,7 @@ subroutine read_phase_function(phase_function_file)
 
   character(len=512), intent(in) :: phase_function_file
 
-  integer :: status, readwrite, unit, blocksize,nfound,group,firstpix,nbuffer,npixels, hdutype, i
+  integer :: status, readwrite, unit, blocksize,nfound,group,firstpix,nbuffer,npixels, i
   real :: nullval
   integer, dimension(2) :: naxes
   logical :: anynull

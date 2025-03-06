@@ -1,6 +1,7 @@
 module read_pluto
 
   use parametres
+  use constantes
   use messages
   use mcfost_env
   use grid
@@ -138,16 +139,13 @@ contains
     Ggrav_pluto = 1.0_dp
 
     if (lscale_length_units) then
+       write(*,*) 'Lengths are rescaled by ', real(scale_length_units_factor)
        ulength_au = ulength_au * scale_length_units_factor
-    else
-       scale_length_units_factor = 1.0
     endif
 
     if (lscale_mass_units) then
-       write(*,*) 'Mass are rescaled by ', real(scale_mass_units_factor)
+       write(*,*) 'Masses are rescaled by ', real(scale_mass_units_factor)
        usolarmass = usolarmass * scale_mass_units_factor
-    else
-       scale_mass_units_factor = 1.0
     endif
 
     umass = usolarmass *  Msun_to_kg
@@ -189,6 +187,7 @@ contains
     file_types(2) = "vx1"
     file_types(3) = "vx2"
     file_types(4) = "vx3"
+    iunit=1
     do l=1, 4
        filename = trim(pluto%dir)//"/"//trim(file_types(l))//"."//trim(trim(pluto%id))//".dbl"
        write(*,*) "Reading "//trim(filename)
@@ -260,7 +259,7 @@ contains
     ! Calcul de la masse de gaz de la zone
     mass = 0.
     do icell=1,n_cells
-       mass = mass + densite_gaz(icell) *  masse_mol_gaz * volume(icell)
+       mass = mass + densite_gaz(icell) *  mu_mH * volume(icell)
     enddo !icell
     mass =  mass * AU3_to_m3 * g_to_Msun
 
@@ -271,7 +270,7 @@ contains
        ! Somme sur les zones pour densite finale
        do icell=1,n_cells
           densite_gaz(icell) = densite_gaz(icell) * facteur
-          masse_gaz(icell) = densite_gaz(icell) * masse_mol_gaz * volume(icell) * AU3_to_m3
+          masse_gaz(icell) = densite_gaz(icell) * mu_mH * volume(icell) * AU3_to_m3
        enddo ! icell
     else
        call error('Gas mass is 0')

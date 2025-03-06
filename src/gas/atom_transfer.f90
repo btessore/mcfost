@@ -71,7 +71,7 @@ module atom_transfer
 
    subroutine dealloc_tau_surface_map()
    !TO DO: only at the centre of lines
-      integer :: ibin,iaz,i,j,la
+
       character(len=50) :: filename
       ! real(kind=dp), allocatable :: image(:,:,:,:,:,:)
 
@@ -122,7 +122,7 @@ module atom_transfer
 
    subroutine nlte_loop_mali()
    ! ------------------------------------------------------------------------------------ !
-   ! Solve the set of statistical equilibrium equations (SEE) with the 
+   ! Solve the set of statistical equilibrium equations (SEE) with the
    ! Multi-level Accelerated Lambda Iterations method (Rybicki & Hummer 92, Apj 202 209).
    !
    ! By default, the SEE are solved twice.
@@ -132,7 +132,7 @@ module atom_transfer
       integer :: etape, etape_start, etape_end, iray
       integer :: n_iter, id, i, alloc_status, n_rayons
       ! integer :: , iray_start, n_rayons_max
-      integer :: nact, imax, icell_max, icell_max_2
+      integer :: nact
       integer :: icell, ilevel, nb, nr, unconverged_cells
       integer, parameter :: maxIter = 300!150!, maxIter3 = 10
       !ray-by-ray integration of the SEE
@@ -150,7 +150,7 @@ module atom_transfer
       logical :: l_iterate, l_iterate_ne
       integer :: n_xc
       real(kind=dp), dimension(:), pointer :: tab_xc
-      
+
       !Ng's acceleration
       integer, parameter :: Ng_Ndelay_init = 5 !minimal number of iterations before starting the cycle.
                                                !min is 1 (so that conv_speed can be evaluated)
@@ -159,7 +159,7 @@ module atom_transfer
       real(kind=dp) :: conv_speed_limit
       integer :: iorder, i0_rest, n_iter_accel, iacc
       integer :: Ng_Ndelay, ng_index
-      logical :: lng_turned_on, ng_rest, lconverging, accelerated 
+      logical :: lng_turned_on, ng_rest, lconverging, accelerated
       logical, parameter :: lextrapolate_electron = .false. !extrapolate electrons with populations
       real(kind=dp), dimension(:,:), allocatable :: ngtmp
 
@@ -174,7 +174,7 @@ module atom_transfer
       !-> overall the non-LTE loop
       real :: time_nlte, time_nlte_loop, time_nlte_cpu
       real :: cpu_time_begin, cpu_time_end, time_nlte_loop_cpu
-      integer :: count_start, count_end, itime
+      integer :: count_start, count_end
       !-> for a single iteration
       integer :: cstart_iter, cend_iter
       real :: time_iteration, cpustart_iter, cpuend_iter, time_iter_avg
@@ -329,7 +329,7 @@ module atom_transfer
             ng_index = Neq_ng - mod(n_iter-1,Neq_ng) !overwritten if lng_acceleration.
             ! NOTE :: the index 1 is hard-coded within the non-LTE loop as it stores the actual (running) value
             !           of the populations and electronic density.
-            ! 
+            !
             !                    goes with maxIter
             write(*,'(" *** Iteration #"(1I4)"; step #"(1I1)"; threshold: "(1ES11.2E3)"; Nrays: "(1I5))') &
                      n_iter, etape, precision, n_rayons
@@ -522,7 +522,7 @@ module atom_transfer
                         !    reshape(ngpop(1:at%Nlevel,nact,:,:),shape=[n_cells,at%Nlevel,Neq_ng],order=[2,1,3]),&!then flatten
                         !    (/n_cells*at%Nlevel,Neq_ng/))
 
-                        call Accelerate(n_cells*at%Nlevel,Ng_Norder,ngtmp) 
+                        call Accelerate(n_cells*at%Nlevel,Ng_Norder,ngtmp)
 
                         !reform in (Nlevel,N_cells,Neq_ng)
                         ngpop(1:at%Nlevel,nact,:,:) = reshape(ngtmp,(/at%Nlevel,n_cells,Neq_ng/))
@@ -1044,7 +1044,6 @@ module atom_transfer
    subroutine setup_image_grid()
    !to do lmono -limg
    !keep somewhere tab_lambda_sed = tab_lambda because tab_lambda is overwritten in non-LTE
-      integer :: kr, nat
 
       call deallocate_wavelengths_gasrt()
       call dealloc_atom_opac()
@@ -1175,7 +1174,7 @@ module atom_transfer
 
          if (lany_init4) then
             call nlte_loop_sobolev()
-            ! MALI step after Sobolev step ? 
+            ! MALI step after Sobolev step ?
             ! if (.not.lescape_prob) then
             !    !to preserve ray-resolution ?
             !    istep_start = 2
@@ -1220,7 +1219,7 @@ module atom_transfer
 
       if (laccretion_shock) then
          !3 + lg(Facc) = lg(Facc) erg/cm2/s
-         if (max_Facc>0) write(*,'("max(lgFacc)="(1F7.3)" W/m^2; min(lgFacc)="(1F7.3)" W/m^2")') & 
+         if (max_Facc>0) write(*,'("max(lgFacc)="(1F7.3)" W/m^2; min(lgFacc)="(1F7.3)" W/m^2")') &
             log10(max_Facc), log10(min_Facc)
          if (max_Tshock>0) write(*,'("max(Tshock)="(1I8)" K; min(Tshock)="(1I8)" K")') &
             nint(max_Tshock), nint(min_Tshock)
@@ -1245,7 +1244,7 @@ module atom_transfer
    end subroutine atom_line_transfer
 
    subroutine init_dust_temperature()
-      !lowering too much the treshold might create some convergence issues in the non-LTE pops or in 
+      !lowering too much the treshold might create some convergence issues in the non-LTE pops or in
       ! the electronic density calculations (0 division mainly for low values).
       real(kind=dp), parameter :: T_formation = 2000.0 ! [K]
       logical, dimension(:), allocatable :: ldust
@@ -1261,7 +1260,7 @@ module atom_transfer
       where(ldust) T(:) = Tdust(:)
       if (any(T < T_formation)) call warning('(atom_transfer) Setting the gas transparent where T < 2000 K.')
       where (T < T_formation) icompute_atomRT = 0
-      !or set the atomic gas temperature to 0 in dust regions ? 
+      !or set the atomic gas temperature to 0 in dust regions ?
       if (any(icompute_atomRT>0)) then
          write(*,*) "T:", real(maxval(T,icompute_atomRT>0)), real(minval(T,icompute_atomRT>0))
          write(*,*) "T (rho_dust = 0):", real(maxval(T,(icompute_atomRT>0).and..not.ldust)), &
@@ -1297,7 +1296,7 @@ module atom_transfer
       if (lvariable_dust) then
          p_icell => icell
       else
-         p_icell => icell_ref
+         p_icell => icell1
       endif
 
       call realloc_dust_atom()
@@ -1458,8 +1457,7 @@ module atom_transfer
       integer :: ri_RT, phi_RT
       logical :: lresolved
 
-      real(kind=dp) :: z1, z2
-      integer, dimension(:), allocatable :: tab_pix_healpix
+      !integer, dimension(:), allocatable :: tab_pix_healpix
 
       write(*,*) "Vector to observer =", real(tab_u_rt(ibin,iaz)),real(tab_v_rt(ibin,iaz)),real(tab_w_rt(ibin))
       write(*,*) "i=", real(tab_RT_incl(ibin)), "az=", real(tab_RT_az(iaz))
@@ -1692,7 +1690,7 @@ module atom_transfer
       do i = 1,npix_x
          !$ id = omp_get_thread_num() + 1
          do j = 1,npix_y
-        
+
             pixelcenter(:,id) = Icorner(:) + (i-0.5_dp) * dx(:) + (j-0.5_dp) * dy(:)
 
             x0(:) = pixelcenter(1,id)
